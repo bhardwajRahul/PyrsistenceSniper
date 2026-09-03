@@ -262,6 +262,23 @@ def test_io_path_is_a_no_op_off_windows(monkeypatch: pytest.MonkeyPatch) -> None
     assert _io_path(path) is path
 
 
+def _long_paths_enabled() -> bool:
+    """Report whether this host has had Win32's MAX_PATH limit lifted."""
+    # GitHub's windows runners ship with this turned on, so the precondition
+    # below is only true where the limit still bites. The rest of the test
+    # holds either way, which is why this gates one assert and not the test.
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\FileSystem",
+        ) as key:
+            return bool(winreg.QueryValueEx(key, "LongPathsEnabled")[0])
+    except OSError:
+        return False
+
+
 @pytest.mark.skipif(os.name != "nt", reason="long-path prefixing is Windows-only")
 def test_over_length_tree_is_readable(tmp_path: Path) -> None:
     """A file past MAX_PATH is found and hashed rather than read as absent."""
@@ -275,7 +292,8 @@ def test_over_length_tree_is_readable(tmp_path: Path) -> None:
     with Path("\\\\?\\" + str(payload)).open("wb") as handle:
         handle.write(b"persistence")
 
-    assert not payload.is_file(), "precondition: plain pathlib cannot see it"
+    if not _long_paths_enabled():
+        assert not payload.is_file(), "precondition: plain pathlib cannot see it"
 
     filesystem = FilesystemHelper(tmp_path)
     windows_path = "C:\\" + str(payload.relative_to(tmp_path))
