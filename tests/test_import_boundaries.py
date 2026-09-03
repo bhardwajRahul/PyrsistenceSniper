@@ -1,41 +1,28 @@
-"""Permanent enforcement tests for module dependency boundaries.
-
-These tests parse every .py file using the ast module and verify that:
-1. No module imports from a higher architectural layer (downward-only deps).
-2. Plugin T* files import only from plugins.base and plugins (register_plugin).
-3. No plugin T* module imports from another plugin T* module.
-
-Any violation causes a hard test failure with a descriptive message naming
-the offending file and import.
-"""
+"""Enforcement tests for the package's layered import boundaries."""
 
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 from pathlib import Path
 
 _PACKAGE_ROOT = Path("pyrsistencesniper")
 
-# Architectural layers -- lower number means lower in the dependency stack.
-# A module at layer N may only import from layers <= N.
+# Lower layer number = lower in the stack; a module may import layers <= its own.
 LAYERS: dict[str, int] = {
     "config": 0,
     "data": 0,
     "core": 1,
+    "detection": 2,
     "plugins": 2,
     "enrichment": 2,
+    "timeline": 2,
     "output": 3,
     "ui": 3,
 }
 
-# Named exceptions: (source_file_relative, target_module_prefix)
-# core/pipeline.py is the top-level orchestrator that necessarily imports from
-# plugins (layer 2) and enrichment (layer 2) to run the detection pipeline.
-_ALLOWED_UPWARD_IMPORTS: set[tuple[str, str]] = {
-    ("core/pipeline.py", "pyrsistencesniper.enrichment"),
-    ("core/pipeline.py", "pyrsistencesniper.plugins"),
-    ("core/pipeline.py", "pyrsistencesniper.plugins.base"),
-}
+# Entries are (source_file_relative, target_module).
+_ALLOWED_UPWARD_IMPORTS: set[tuple[str, str]] = set()
 
 
 def _extract_imports(filepath: Path) -> list[str]:
@@ -77,15 +64,26 @@ def _relative_path(filepath: Path) -> str:
     return filepath.relative_to(_PACKAGE_ROOT).as_posix()
 
 
+def _iter_package_modules() -> Iterator[tuple[Path, str]]:
+    """Yield every package source file with its package-relative path."""
+    for py_file in sorted(_PACKAGE_ROOT.rglob("*.py")):
+        yield py_file, _relative_path(py_file)
+
+
+def _iter_technique_modules() -> Iterator[tuple[Path, str, str]]:
+    """Yield each plugins/T*/ module with its relative path and technique directory."""
+    for py_file, module_path in _iter_package_modules():
+        parts = module_path.split("/")
+        if len(parts) >= 3 and parts[0] == "plugins" and parts[1].startswith("T"):
+            yield py_file, module_path, parts[1]
+
+
 def test_no_upward_imports() -> None:
     """No module imports from a higher architectural layer."""
     violations: list[str] = []
 
-    for py_file in sorted(_PACKAGE_ROOT.rglob("*.py")):
-        rel = _relative_path(py_file)
-        parts = rel.split("/")
-
-        # Skip top-level package files (cli.py, __init__.py, __main__.py)
+    for py_file, module_path in _iter_package_modules():
+        parts = module_path.split("/")
         if len(parts) < 2:
             continue
 
@@ -100,12 +98,10 @@ def test_no_upward_imports() -> None:
             _, target_level = target_info
 
             if target_level > source_layer:
-                # Check named exceptions
-                pair = (rel, target_module)
-                if pair in _ALLOWED_UPWARD_IMPORTS:
+                if (module_path, target_module) in _ALLOWED_UPWARD_IMPORTS:
                     continue
                 violations.append(
-                    f"  {rel} (layer {source_layer}) imports "
+                    f"  {module_path} (layer {source_layer}) imports "
                     f"{target_module} (layer {target_level})"
                 )
 
@@ -115,29 +111,15 @@ def test_no_upward_imports() -> None:
 
 
 def test_plugins_only_import_from_base() -> None:
-    """All plugin T* files import only from plugins.base or plugins."""
-    violations: list[str] = []
-
-    for py_file in sorted(_PACKAGE_ROOT.rglob("*.py")):
-        rel = _relative_path(py_file)
-        parts = rel.split("/")
-
-        # Only check plugins/T*/**/*.py files
-        if len(parts) < 3 or parts[0] != "plugins" or not parts[1].startswith("T"):
-            continue
-
-        for target_module in _extract_imports(py_file):
-            # Allowed: pyrsistencesniper.plugins.base, pyrsistencesniper.plugins,
-            # and pyrsistencesniper.core.* (plugins legitimately use core utilities)
-            if target_module in (
-                "pyrsistencesniper.plugins.base",
-                "pyrsistencesniper.plugins",
-            ):
-                continue
-            if target_module.startswith("pyrsistencesniper.core"):
-                continue
-            # Any other pyrsistencesniper.* import is forbidden
-            violations.append(f"  {rel} imports {target_module}")
+    """Plugins stay swappable only while they depend on base and core alone."""
+    allowed = ("pyrsistencesniper.plugins.base", "pyrsistencesniper.plugins")
+    violations = [
+        f"  {module_path} imports {target_module}"
+        for py_file, module_path, _technique_dir in _iter_technique_modules()
+        for target_module in _extract_imports(py_file)
+        if target_module not in allowed
+        and not target_module.startswith("pyrsistencesniper.core")
+    ]
 
     assert not violations, (
         "Plugin files must import only from plugins.base or plugins:\n"
@@ -149,31 +131,81 @@ def test_no_cross_plugin_imports() -> None:
     """No plugin T* module imports from another plugin T* module."""
     violations: list[str] = []
 
-    for py_file in sorted(_PACKAGE_ROOT.rglob("*.py")):
-        rel = _relative_path(py_file)
-        parts = rel.split("/")
-
-        # Only check plugins/T*/**/*.py files
-        if len(parts) < 3 or parts[0] != "plugins" or not parts[1].startswith("T"):
-            continue
-
-        source_t_dir = parts[1]  # e.g. "T1546"
-
+    for py_file, module_path, source_technique in _iter_technique_modules():
         for target_module in _extract_imports(py_file):
-            # Check for imports like pyrsistencesniper.plugins.T*
-            mod_parts = target_module.split(".")
+            target_parts = target_module.split(".")
             if (
-                len(mod_parts) >= 3
-                and mod_parts[1] == "plugins"
-                and mod_parts[2].startswith("T")
+                len(target_parts) >= 3
+                and target_parts[1] == "plugins"
+                and target_parts[2].startswith("T")
+                and target_parts[2] != source_technique
             ):
-                target_t_dir = mod_parts[2]
-                if target_t_dir != source_t_dir:
-                    violations.append(
-                        f"  {rel} imports from {target_module} "
-                        f"(cross-plugin: {source_t_dir} -> {target_t_dir})"
-                    )
+                violations.append(
+                    f"  {module_path} imports from {target_module} "
+                    f"(cross-plugin: {source_technique} -> {target_parts[2]})"
+                )
 
     assert not violations, "Cross-plugin imports are forbidden:\n" + "\n".join(
         violations
+    )
+
+
+def test_core_registry_is_pure() -> None:
+    """core/registry.py is a pure library: no context/detection/plugin imports."""
+    forbidden_prefixes = (
+        "pyrsistencesniper.core.context",
+        "pyrsistencesniper.core.filesystem",
+        "pyrsistencesniper.detection",
+        "pyrsistencesniper.plugins",
+        "pyrsistencesniper.enrichment",
+        "pyrsistencesniper.output",
+        "pyrsistencesniper.ui",
+    )
+    registry_module = _PACKAGE_ROOT / "core" / "registry.py"
+    violations = [
+        f"  {_relative_path(registry_module)} imports {target}"
+        for target in _extract_imports(registry_module)
+        if target.startswith(forbidden_prefixes)
+    ]
+    assert not violations, "core/registry.py must stay a pure library:\n" + "\n".join(
+        violations
+    )
+
+
+def test_no_references_to_removed_modules() -> None:
+    """No module may reference a package path retired by the flattening."""
+    retired = (
+        "pyrsistencesniper.core.image",
+        "pyrsistencesniper.core.registry.helper",
+        "pyrsistencesniper.core.registry.node",
+        "pyrsistencesniper.core.windows.paths",
+        "pyrsistencesniper.core.windows.cmdline",
+        "pyrsistencesniper.core.windows.classify",
+    )
+    violations: list[str] = []
+    for py_file, module_path in _iter_package_modules():
+        violations.extend(
+            f"  {module_path} imports {target}"
+            for target in _extract_imports(py_file)
+            if target.startswith(retired)
+        )
+    assert not violations, "References to retired modules:\n" + "\n".join(violations)
+
+
+def test_detection_engine_has_no_plugin_imports() -> None:
+    """detection/ must not import plugins/, except the pipeline orchestrator."""
+    violations: list[str] = []
+    detection_dir = _PACKAGE_ROOT / "detection"
+    for py_file in sorted(detection_dir.rglob("*.py")):
+        module_path = _relative_path(py_file)
+        if module_path == "detection/pipeline.py":
+            continue
+        violations.extend(
+            f"  {module_path} imports {target}"
+            for target in _extract_imports(py_file)
+            if target.startswith("pyrsistencesniper.plugins")
+        )
+    assert not violations, (
+        "detection/ must not import plugins/ "
+        "(prevents detection.engine ↔ plugins.base cycle):\n" + "\n".join(violations)
     )
