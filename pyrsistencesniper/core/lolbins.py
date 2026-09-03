@@ -32,12 +32,13 @@ _HTTP_SERVER_ERROR_MAX = 600
 
 def _load_bundled() -> frozenset[str]:
     """Load LOLBin names from the bundled data file."""
-    ref = importlib.resources.files("pyrsistencesniper.data").joinpath("lolbins.json")
-    raw = ref.read_text(encoding="utf-8")
-    data = json.loads(raw)
+    resource = importlib.resources.files("pyrsistencesniper.data").joinpath(
+        "lolbins.json"
+    )
+    data = json.loads(resource.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise ValueError("Bundled lolbins.json has unexpected format")
-    return frozenset(x.lower() for x in data if isinstance(x, str) and x)
+    return frozenset(name.lower() for name in data if isinstance(name, str) and name)
 
 
 def _load_cache() -> frozenset[str] | None:
@@ -49,25 +50,25 @@ def _load_cache() -> frozenset[str] | None:
     except (json.JSONDecodeError, OSError):
         logger.debug("Cache file unreadable, ignoring", exc_info=True)
         return None
-    if not isinstance(data, list) or not all(isinstance(x, str) for x in data):
+    if not isinstance(data, list) or not all(isinstance(name, str) for name in data):
         return None
-    return frozenset(x.lower() for x in data if x)
+    return frozenset(name.lower() for name in data if name)
 
 
 def download_lolbins() -> set[str]:
     """Download LOLBin names from the LOLBAS API and persist to the user cache."""
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
-            resp = httpx.get(LOLBAS_URL, timeout=_TIMEOUT_S, follow_redirects=True)
-            if (
-                resp.status_code == _HTTP_TOO_MANY_REQUESTS
-                or _HTTP_SERVER_ERROR_MIN <= resp.status_code < _HTTP_SERVER_ERROR_MAX
+            response = httpx.get(LOLBAS_URL, timeout=_TIMEOUT_S, follow_redirects=True)
+            status = response.status_code
+            if status == _HTTP_TOO_MANY_REQUESTS or (
+                _HTTP_SERVER_ERROR_MIN <= status < _HTTP_SERVER_ERROR_MAX
             ):
                 raise httpx.HTTPStatusError(
-                    "transient", request=resp.request, response=resp
+                    "transient", request=response.request, response=response
                 )
-            resp.raise_for_status()
-            payload = resp.json()
+            response.raise_for_status()
+            payload = response.json()
             break
         except (
             httpx.TimeoutException,
