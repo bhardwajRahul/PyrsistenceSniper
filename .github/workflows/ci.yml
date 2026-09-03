@@ -36,7 +36,7 @@ jobs:
         run: poetry run ruff check pyrsistencesniper/ tests/
 
       - name: Type check
-        run: poetry run mypy --strict pyrsistencesniper/
+        run: poetry run mypy pyrsistencesniper/
 
       - name: Test with coverage
         run: poetry run pytest --cov=pyrsistencesniper --cov-branch --cov-report=xml

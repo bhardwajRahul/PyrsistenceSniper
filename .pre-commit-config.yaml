@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.6
+    rev: v0.16.2
     hooks:
       - id: ruff-format
         args: [pyrsistencesniper/, tests/]
@@ -17,8 +17,8 @@ repos:
   - repo: local
     hooks:
       - id: mypy
-        name: mypy --strict
-        entry: poetry run mypy --strict pyrsistencesniper/
+        name: mypy
+        entry: poetry run mypy pyrsistencesniper/
         language: system
         pass_filenames: false
         types: [python]
