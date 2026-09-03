@@ -1,3 +1,5 @@
+"""Detection for Boot Verification Program."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class BootVerificationProgram(PersistencePlugin):
+    """Detects Boot Verification Program persistence entries."""
+
     definition = CheckDefinition(
         id="boot_verification_program",
         technique="Boot Verification Program",

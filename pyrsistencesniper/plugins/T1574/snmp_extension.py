@@ -1,3 +1,5 @@
+"""Detection for SNMP Extension Agent DLL."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class SnmpExtensionAgent(PersistencePlugin):
+    """Detects SNMP Extension Agent DLL persistence entries."""
+
     definition = CheckDefinition(
         id="snmp_extension_agent",
         technique="SNMP Extension Agent DLL",

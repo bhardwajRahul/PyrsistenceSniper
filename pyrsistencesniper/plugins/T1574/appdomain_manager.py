@@ -1,3 +1,5 @@
+"""Detection for AppDomainManager Injection."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class AppDomainManagerInjection(PersistencePlugin):
+    """Detects AppDomainManager Injection persistence entries."""
+
     definition = CheckDefinition(
         id="appdomain_manager",
         technique="AppDomainManager Injection",

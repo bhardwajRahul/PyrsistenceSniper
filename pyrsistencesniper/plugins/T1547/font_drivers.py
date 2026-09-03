@@ -1,3 +1,5 @@
+"""Detection for Font Drivers."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class FontDrivers(PersistencePlugin):
+    """Detects Font Drivers persistence entries."""
+
     definition = CheckDefinition(
         id="font_drivers",
         technique="Font Drivers",

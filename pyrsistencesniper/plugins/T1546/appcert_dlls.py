@@ -1,3 +1,5 @@
+"""Detection for AppCert DLLs."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class AppCertDlls(PersistencePlugin):
+    """Detects AppCert DLLs persistence entries."""
+
     definition = CheckDefinition(
         id="appcert_dlls",
         technique="AppCert DLLs",

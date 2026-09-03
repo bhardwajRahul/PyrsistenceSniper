@@ -1,3 +1,5 @@
+"""Detection for Recycle Bin COM Extension Handler."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -13,6 +15,8 @@ _RECYCLE_BIN_CLSID = r"{645FF040-5081-101B-9F08-00AA002F954E}"
 
 @register_plugin
 class RecycleBinComExtension(PersistencePlugin):
+    """Detects Recycle Bin COM Extension Handler persistence entries."""
+
     definition = CheckDefinition(
         id="recycle_bin_com_extension",
         technique="Recycle Bin COM Extension Handler",

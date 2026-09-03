@@ -1,3 +1,5 @@
+"""Report renderers and the registry that maps a format name to one."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.output.base import OutputBase

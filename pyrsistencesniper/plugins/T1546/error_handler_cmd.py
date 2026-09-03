@@ -1,3 +1,5 @@
+"""Detection for ErrorHandler.cmd Persistence."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class ErrorHandlerCmd(PersistencePlugin):
+    """Detects ErrorHandler.cmd Persistence persistence entries."""
+
     definition = CheckDefinition(
         id="error_handler_cmd",
         technique="ErrorHandler.cmd Persistence",
@@ -24,6 +28,7 @@ class ErrorHandlerCmd(PersistencePlugin):
     )
 
     def run(self) -> list[Finding]:
+        """Report ErrorHandler.cmd, which Windows does not ship."""
         path = r"Windows\System32\ErrorHandler.cmd"
         if not self.filesystem.exists(path):
             return []

@@ -1,3 +1,5 @@
+"""Detections for the Win9x-era RunServices auto-start keys."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class RunServices(PersistencePlugin):
+    """Detects RunServices (Legacy) persistence entries."""
+
     definition = CheckDefinition(
         id="run_services",
         technique="RunServices (Legacy)",
@@ -32,6 +36,8 @@ class RunServices(PersistencePlugin):
 
 @register_plugin
 class RunServicesOnce(PersistencePlugin):
+    """Detects RunServicesOnce (Legacy) persistence entries."""
+
     definition = CheckDefinition(
         id="run_services_once",
         technique="RunServicesOnce (Legacy)",

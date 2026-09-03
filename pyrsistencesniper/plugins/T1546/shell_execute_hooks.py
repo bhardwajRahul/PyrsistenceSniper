@@ -1,3 +1,5 @@
+"""Detection for ShellExecuteHooks and SharedTaskScheduler."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class ShellExecuteHooks(PersistencePlugin):
+    """Detects ShellExecuteHooks persistence entries."""
+
     definition = CheckDefinition(
         id="shell_execute_hooks",
         technique="ShellExecuteHooks",
@@ -33,6 +37,8 @@ class ShellExecuteHooks(PersistencePlugin):
 
 @register_plugin
 class SharedTaskScheduler(PersistencePlugin):
+    """Detects SharedTaskScheduler persistence entries."""
+
     definition = CheckDefinition(
         id="shared_task_scheduler",
         technique="SharedTaskScheduler",

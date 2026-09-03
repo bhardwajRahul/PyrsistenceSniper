@@ -1,3 +1,5 @@
+"""Startup banner printed to stderr when running on a terminal."""
+
 # ruff: noqa: E501
 from __future__ import annotations
 

@@ -1,3 +1,5 @@
+"""Detection for Command Processor AutoRun."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class CmdAutoRun(PersistencePlugin):
+    """Detects Command Processor AutoRun persistence entries."""
+
     definition = CheckDefinition(
         id="cmd_autorun",
         technique="Command Processor AutoRun",

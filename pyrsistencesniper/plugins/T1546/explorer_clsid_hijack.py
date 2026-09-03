@@ -1,3 +1,5 @@
+"""Detection for Explorer Desktop CLSID Hijack."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class ExplorerClsidHijack(PersistencePlugin):
+    """Detects Explorer Desktop CLSID Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="explorer_clsid_hijack",
         technique="Explorer Desktop CLSID Hijack",
