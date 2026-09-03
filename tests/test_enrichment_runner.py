@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+import pytest
 from pyrsistencesniper.core.models import AccessLevel, Enrichment, Finding
-from pyrsistencesniper.enrichment.base import EnrichmentPlugin
-from pyrsistencesniper.enrichment.runner import _try_enrich, run_enrichments
+from pyrsistencesniper.enrichment import base as enrichment_base
+from pyrsistencesniper.enrichment.base import EnrichmentPlugin, run_enrichments
 
 
 def _make_finding(value: str = "test.exe") -> Finding:
+    """Build a minimal Finding; only the value distinguishes one from another."""
     return Finding(
         path="HKLM\\Run",
         value=value,
@@ -21,76 +25,99 @@ def _make_finding(value: str = "test.exe") -> Finding:
 
 
 class _GoodPlugin(EnrichmentPlugin):
+    """Provider that has data for every finding."""
+
     def enrich(self, finding: Finding) -> Enrichment | None:
+        """Return a fixed enrichment so results are predictable."""
         return Enrichment(provider="good", data={"score": "10"})
 
 
 class _NonePlugin(EnrichmentPlugin):
+    """Provider with nothing to say about any finding."""
+
     def enrich(self, finding: Finding) -> Enrichment | None:
+        """Return None, the contract's way of contributing nothing."""
         return None
 
 
 class _CrashingPlugin(EnrichmentPlugin):
+    """Provider that raises, to prove one bad plugin cannot sink a scan."""
+
     def enrich(self, finding: Finding) -> Enrichment | None:
+        """Always raise; the runner is expected to log and continue."""
         raise RuntimeError("plugin exploded")
 
 
-def test_try_enrich_success() -> None:
-    """A working plugin returns its enrichment."""
-    result = _try_enrich(_GoodPlugin, _make_finding())
-    assert result is not None
-    assert result.provider == "good"
+_RegistryInstaller = Callable[..., None]
 
 
-def test_try_enrich_returns_none() -> None:
-    """A plugin that returns None is passed through."""
-    result = _try_enrich(_NonePlugin, _make_finding())
-    assert result is None
+@pytest.fixture
+def only_registered(monkeypatch: pytest.MonkeyPatch) -> _RegistryInstaller:
+    """Replace the enrichment registry with an explicit list for one test."""
+
+    def _install(*plugins: type[EnrichmentPlugin]) -> None:
+        """Swap the module-level registry for exactly these plugin classes."""
+        monkeypatch.setattr(enrichment_base, "_ENRICHMENT_REGISTRY", list(plugins))
+
+    return _install
 
 
-def test_try_enrich_exception_returns_none() -> None:
-    """A crashing plugin returns None instead of propagating."""
-    result = _try_enrich(_CrashingPlugin, _make_finding())
-    assert result is None
+def test_run_enrichments_collects_results(only_registered: _RegistryInstaller) -> None:
+    """run_enrichments pairs each finding with the enrichments produced for it."""
+    only_registered(_GoodPlugin)
+
+    results = run_enrichments([_make_finding("a.exe"), _make_finding("b.exe")])
+
+    assert [enrichments[0].provider for _finding, enrichments in results] == [
+        "good",
+        "good",
+    ]
 
 
-def test_run_enrichments_collects_results(monkeypatch: object) -> None:
-    """run_enrichments pairs findings with collected enrichments."""
-    import pyrsistencesniper.enrichment.runner as runner_mod
+def test_run_enrichments_preserves_finding_order(
+    only_registered: _RegistryInstaller,
+) -> None:
+    """Results come back in the order the findings were supplied."""
+    only_registered(_GoodPlugin)
 
-    monkeypatch.setattr(runner_mod, "_ENRICHMENT_REGISTRY", [_GoodPlugin])
+    results = run_enrichments([_make_finding("a.exe"), _make_finding("b.exe")])
 
-    findings = [_make_finding("a.exe"), _make_finding("b.exe")]
-    results = run_enrichments(findings)
-
-    assert len(results) == 2
-    for _finding, enrichments in results:
-        assert len(enrichments) == 1
-        assert enrichments[0].provider == "good"
+    assert [finding.value for finding, _enrichments in results] == ["a.exe", "b.exe"]
 
 
-def test_run_enrichments_skips_none(monkeypatch: object) -> None:
-    """Enrichments returning None are excluded from the result tuple."""
-    import pyrsistencesniper.enrichment.runner as runner_mod
-
-    monkeypatch.setattr(runner_mod, "_ENRICHMENT_REGISTRY", [_NonePlugin])
+def test_run_enrichments_skips_none(only_registered: _RegistryInstaller) -> None:
+    """An enrichment returning None contributes nothing to the result tuple."""
+    only_registered(_NonePlugin)
 
     results = run_enrichments([_make_finding()])
-    assert len(results) == 1
-    _finding, enrichments = results[0]
-    assert enrichments == ()
+
+    assert results[0][1] == ()
 
 
-def test_run_enrichments_isolates_crash(monkeypatch: object) -> None:
-    """A crashing plugin does not prevent other enrichments from running."""
-    import pyrsistencesniper.enrichment.runner as runner_mod
+def test_run_enrichments_isolates_crash(only_registered: _RegistryInstaller) -> None:
+    """A crashing enrichment does not prevent the others from running."""
+    only_registered(_CrashingPlugin, _GoodPlugin)
 
-    monkeypatch.setattr(
-        runner_mod, "_ENRICHMENT_REGISTRY", [_CrashingPlugin, _GoodPlugin]
+    results = run_enrichments([_make_finding()])
+
+    assert [enrichment.provider for enrichment in results[0][1]] == ["good"]
+
+
+def test_run_enrichments_reports_progress(only_registered: _RegistryInstaller) -> None:
+    """The runner reports one progress tick per finding."""
+    only_registered(_GoodPlugin)
+    calls: list[tuple[str, int, int]] = []
+
+    run_enrichments(
+        [_make_finding("a.exe"), _make_finding("b.exe")],
+        progress=lambda stage, current, total: calls.append((stage, current, total)),
     )
 
-    results = run_enrichments([_make_finding()])
-    assert len(results) == 1
-    _finding, enrichments = results[0]
-    assert len(enrichments) == 1
-    assert enrichments[0].provider == "good"
+    assert calls == [("Enriching results", 1, 2), ("Enriching results", 2, 2)]
+
+
+def test_run_enrichments_on_empty_input(only_registered: _RegistryInstaller) -> None:
+    """No findings yields no results without touching the registry."""
+    only_registered(_GoodPlugin)
+
+    assert run_enrichments([]) == []
