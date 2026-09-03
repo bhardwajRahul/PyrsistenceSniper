@@ -1,4 +1,4 @@
-"""Tests for core/resolver.py — ResolutionPipeline and SignerExtractor."""
+"""Tests for the resolution pipeline that fills file metadata on findings."""
 
 from __future__ import annotations
 
@@ -7,41 +7,42 @@ from unittest.mock import MagicMock, create_autospec, patch
 
 from pyrsistencesniper.core.filesystem import FilesystemHelper
 from pyrsistencesniper.core.models import Finding
-from pyrsistencesniper.core.resolver import ResolutionPipeline, SignerExtractor
+from pyrsistencesniper.core.resolver import ResolutionPipeline
 
 
 def _make_pipeline(
     exists: bool = False,
     sha256: str = "",
 ) -> ResolutionPipeline:
-    fs = create_autospec(FilesystemHelper, instance=True)
-    fs.exists.return_value = exists
-    fs.sha256.return_value = sha256
-    fs.resolve.side_effect = lambda p: Path("/fake") / p
-    return ResolutionPipeline(fs)
+    """Build a pipeline over a stub filesystem with fixed exists and sha256 answers."""
+    filesystem = create_autospec(FilesystemHelper, instance=True)
+    filesystem.exists.return_value = exists
+    filesystem.sha256.return_value = sha256
+    filesystem.resolve.side_effect = lambda windows_path: Path("/fake") / windows_path
+    return ResolutionPipeline(filesystem)
 
 
-# -- resolve fills fields -----------------------------------------------------
-
-
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_fills_is_lolbin(_mock_signer: MagicMock) -> None:
+    """A bare LOLBin name is classified without the file needing to exist."""
     pipeline = _make_pipeline()
     finding = Finding(value="mshta.exe")
     resolved = pipeline.resolve(finding)
     assert resolved.is_lolbin is True
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_fills_is_builtin(_mock_signer: MagicMock) -> None:
+    """Classification of a built-in comes from the name, not from disk."""
     pipeline = _make_pipeline()
     finding = Finding(value="explorer.exe")
     resolved = pipeline.resolve(finding)
     assert resolved.is_builtin is True
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_non_lolbin_non_builtin(_mock_signer: MagicMock) -> None:
+    """An unknown binary comes back decided as False, not left unknown."""
     pipeline = _make_pipeline()
     finding = Finding(value="custom_app.exe")
     assert finding.is_lolbin is None
@@ -51,24 +52,18 @@ def test_resolve_non_lolbin_non_builtin(_mock_signer: MagicMock) -> None:
     assert resolved.is_builtin is False
 
 
-# -- caching ------------------------------------------------------------------
-
-
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_caches_by_path(_mock_signer: MagicMock) -> None:
+    """Two Run keys naming one binary get the same verdict out of the cache."""
     pipeline = _make_pipeline()
-    f1 = Finding(value="mshta.exe", path="HKLM\\Run")
-    f2 = Finding(value="mshta.exe", path="HKLM\\RunOnce")
-    r1 = pipeline.resolve(f1)
-    r2 = pipeline.resolve(f2)
-    assert r1.is_lolbin == r2.is_lolbin is True
+    from_run = pipeline.resolve(Finding(value="mshta.exe", path="HKLM\\Run"))
+    from_run_once = pipeline.resolve(Finding(value="mshta.exe", path="HKLM\\RunOnce"))
+    assert from_run.is_lolbin == from_run_once.is_lolbin is True
 
 
-# -- skip already set ---------------------------------------------------------
-
-
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_skips_already_set_fields(_mock_signer: MagicMock) -> None:
+    """A plugin's own verdict outranks the resolver's, even where the two disagree."""
     pipeline = _make_pipeline()
     finding = Finding(value="explorer.exe", is_builtin=True, is_lolbin=True)
     resolved = pipeline.resolve(finding)
@@ -76,39 +71,36 @@ def test_resolve_skips_already_set_fields(_mock_signer: MagicMock) -> None:
     assert resolved.is_builtin is True
 
 
-# -- tri-state logic ----------------------------------------------------------
-
-
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_respects_explicit_false_exists(_mock_signer: MagicMock) -> None:
-    """A plugin that explicitly sets exists=False should not be overwritten."""
+    """A plugin that already proved the file absent keeps that verdict."""
     pipeline = _make_pipeline(exists=True)
     finding = Finding(value="explorer.exe", exists=False)
     resolved = pipeline.resolve(finding)
     assert resolved.exists is False
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_respects_explicit_false_is_lolbin(_mock_signer: MagicMock) -> None:
-    """A plugin that explicitly sets is_lolbin=False should not be overwritten."""
+    """A plugin's explicit non-LOLBin verdict survives the name lookup."""
     pipeline = _make_pipeline()
     finding = Finding(value="mshta.exe", is_lolbin=False)
     resolved = pipeline.resolve(finding)
     assert resolved.is_lolbin is False
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_respects_explicit_false_is_builtin(_mock_signer: MagicMock) -> None:
-    """A plugin that explicitly sets is_builtin=False should not be overwritten."""
+    """A plugin's explicit non-builtin verdict survives the name lookup."""
     pipeline = _make_pipeline()
     finding = Finding(value="explorer.exe", is_builtin=False)
     resolved = pipeline.resolve(finding)
     assert resolved.is_builtin is False
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_fills_none_fields(_mock_signer: MagicMock) -> None:
-    """Default None fields should be filled by the resolver."""
+    """Unset tri-state fields are decided here rather than left unknown."""
     pipeline = _make_pipeline(exists=True)
     finding = Finding(value="mshta.exe")
     assert finding.is_lolbin is None
@@ -120,294 +112,257 @@ def test_resolve_fills_none_fields(_mock_signer: MagicMock) -> None:
     assert resolved.exists is True
 
 
-# -- new tests: exists & sha256 via mock -------------------------------------
-
-
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_fills_exists_true(_mock_signer: MagicMock) -> None:
+    """A present file is recorded as present rather than left unknown."""
     pipeline = _make_pipeline(exists=True)
     finding = Finding(value="notepad.exe")
     resolved = pipeline.resolve(finding)
     assert resolved.exists is True
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_fills_exists_false(_mock_signer: MagicMock) -> None:
+    """A path-like value the helper cannot find is a definite absence, not a gap."""
     pipeline = _make_pipeline(exists=False)
     finding = Finding(value="notepad.exe")
     resolved = pipeline.resolve(finding)
     assert resolved.exists is False
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_fills_sha256(_mock_signer: MagicMock) -> None:
+    """The hash reaches the finding, which is what makes a report checkable."""
     pipeline = _make_pipeline(exists=True, sha256="abc123def456")
     finding = Finding(value="notepad.exe")
     resolved = pipeline.resolve(finding)
     assert resolved.sha256 == "abc123def456"
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_extracts_executable_from_cmdline(_mock_signer: MagicMock) -> None:
-    """cmd /c malware.exe — the resolver should extract malware.exe, not cmd."""
+    """For cmd /c malware.exe the resolver extracts malware.exe, not cmd."""
     pipeline = _make_pipeline()
     finding = Finding(value="cmd /c malware.exe")
     resolved = pipeline.resolve(finding)
-    # cmd.exe is a lolbin and builtin; malware.exe is neither
     assert resolved.is_lolbin is False
     assert resolved.is_builtin is False
 
 
-# -- case-insensitive cache ---------------------------------------------------
-
-
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_case_insensitive_cache(_mock_signer: MagicMock) -> None:
-    """cmd.exe and CMD.EXE should share a single cache entry."""
-    pipeline = _make_pipeline(exists=True)
-    f1 = Finding(value="cmd.exe", path="HKLM\\Run")
-    f2 = Finding(value="CMD.EXE", path="HKLM\\RunOnce")
-    pipeline.resolve(f1)
-    initial_count = pipeline._fs.exists.call_count
-    pipeline.resolve(f2)
-    # Second resolve should not trigger any additional exists calls (cache hit)
-    assert pipeline._fs.exists.call_count == initial_count
+    """cmd.exe and CMD.EXE share one metadata entry, so hashing runs only once."""
+    pipeline = _make_pipeline(exists=True, sha256="abc123")
+    pipeline.resolve(Finding(value="cmd.exe", path="HKLM\\Run"))
+    pipeline.resolve(Finding(value="CMD.EXE", path="HKLM\\RunOnce"))
+    assert pipeline._fs.sha256.call_count == 1
 
 
-# -- skip sha256/signer when not exists ----------------------------------------
-
-
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_skips_sha256_when_not_exists(_mock_signer: MagicMock) -> None:
-    """When file doesn't exist, sha256 should be skipped."""
+    """A file that is not there is never hashed, so no digest is invented."""
     pipeline = _make_pipeline(exists=False)
     finding = Finding(value="missing.exe")
     resolved = pipeline.resolve(finding)
     assert resolved.exists is False
     assert resolved.sha256 == ""
-    # sha256 should not be called when file doesn't exist
     pipeline._fs.sha256.assert_not_called()
 
 
-# -- is_in_os_directory -------------------------------------------------------
-
-
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_fills_is_in_os_directory_true(_mock_signer: MagicMock) -> None:
+    """System32 residency is derived from the value alone, with no disk access."""
     pipeline = _make_pipeline()
     finding = Finding(value="C:\\Windows\\System32\\svchost.exe")
     resolved = pipeline.resolve(finding)
     assert resolved.is_in_os_directory is True
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_fills_is_in_os_directory_false(_mock_signer: MagicMock) -> None:
+    """A user-profile binary is marked outside the OS directories."""
     pipeline = _make_pipeline()
     finding = Finding(value="C:\\Users\\test\\malware.exe")
     resolved = pipeline.resolve(finding)
     assert resolved.is_in_os_directory is False
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_fills_is_in_os_directory_subdirectory(_mock_signer: MagicMock) -> None:
+    """A driver under System32\\drivers is inside the OS tree, not merely near it."""
     pipeline = _make_pipeline()
     finding = Finding(value="C:\\Windows\\System32\\drivers\\srv.sys")
     resolved = pipeline.resolve(finding)
     assert resolved.is_in_os_directory is True
 
 
-@patch("pyrsistencesniper.core.resolver.SignerExtractor.extract", return_value="")
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
 def test_resolve_bare_dll_fallback_to_system32(_mock_signer: MagicMock) -> None:
-    """Bare DLL names like ifmon.dll should resolve to System32."""
-    fs = create_autospec(FilesystemHelper, instance=True)
-    # First call: bare name check, second: System32 path exists
-    fs.exists.side_effect = lambda p: p == "Windows\\System32\\ifmon.dll"
-    fs.sha256.return_value = ""
-    fs.resolve.side_effect = lambda p: Path("/fake") / p
-    pipeline = ResolutionPipeline(fs)
+    """A bare DLL name is looked for in System32, where the loader would find it."""
+    filesystem = create_autospec(FilesystemHelper, instance=True)
+    filesystem.exists.side_effect = lambda windows_path: (
+        windows_path == "Windows\\System32\\ifmon.dll"
+    )
+    filesystem.sha256.return_value = ""
+    filesystem.resolve.side_effect = lambda windows_path: Path("/fake") / windows_path
+    pipeline = ResolutionPipeline(filesystem)
     finding = Finding(value="ifmon.dll")
     resolved = pipeline.resolve(finding)
     assert resolved.is_in_os_directory is True
 
 
-# -- SignerExtractor -----------------------------------------------------------
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_leaves_existence_unknown_for_clsid(_mock_signer: MagicMock) -> None:
+    """A CLSID value is not a path, so the scan must not claim it is missing."""
+    pipeline = _make_pipeline(exists=False)
+    finding = Finding(value="{B2A052B6-0EF7-40C8-AE36-C46284541FED}")
+    assert pipeline.resolve(finding).exists is None
 
 
-class TestExtract:
-    """Tests for SignerExtractor.extract()."""
-
-    def test_extract_returns_empty_when_lief_unavailable(self, tmp_path: Path) -> None:
-        """extract() returns '' when lief is not installed."""
-        fs = FilesystemHelper(image_root=tmp_path)
-        extractor = SignerExtractor(fs)
-        with patch("pyrsistencesniper.core.resolver._HAS_LIEF", False):
-            result = extractor.extract("C:\\Windows\\System32\\cmd.exe")
-        assert result == "", "Should return empty string when lief unavailable"
-
-    def test_extract_returns_empty_for_nonexistent_file(self, tmp_path: Path) -> None:
-        """extract() returns '' when the resolved path does not exist."""
-        fs = FilesystemHelper(image_root=tmp_path)
-        extractor = SignerExtractor(fs)
-        with patch("pyrsistencesniper.core.resolver._HAS_LIEF", True):
-            result = extractor.extract("C:\\nonexistent\\file.exe")
-        assert result == "", "Should return empty string for nonexistent file"
-
-    def test_extract_returns_program_name_from_signature(self, tmp_path: Path) -> None:
-        """extract() returns the program_name from a valid PE signature."""
-        # Create a dummy PE file
-        pe_file = tmp_path / "Windows" / "System32" / "cmd.exe"
-        pe_file.parent.mkdir(parents=True, exist_ok=True)
-        pe_file.write_bytes(b"MZ fake PE content")
-
-        fs = FilesystemHelper(image_root=tmp_path)
-        extractor = SignerExtractor(fs)
-
-        mock_opus = MagicMock()
-        mock_opus.program_name = "Microsoft Windows"
-
-        mock_signer = MagicMock()
-        mock_signer.get_auth_attribute.return_value = mock_opus
-
-        mock_sig = MagicMock()
-        mock_sig.signers = [mock_signer]
-
-        mock_pe = MagicMock()
-        mock_pe.signatures = [mock_sig]
-
-        with (
-            patch("pyrsistencesniper.core.resolver._HAS_LIEF", True),
-            patch(
-                "pyrsistencesniper.core.resolver.lief.PE.parse",
-                return_value=mock_pe,
-            ),
-        ):
-            result = extractor.extract("C:\\Windows\\System32\\cmd.exe")
-        assert result == "Microsoft Windows", (
-            "Should return program_name from PE signature"
-        )
-
-    def test_extract_falls_through_to_catalog_lookup(self, tmp_path: Path) -> None:
-        """extract() calls _lookup_in_catalogs when PE has no direct signature."""
-        pe_file = tmp_path / "Windows" / "System32" / "notepad.exe"
-        pe_file.parent.mkdir(parents=True, exist_ok=True)
-        pe_file.write_bytes(b"MZ fake PE")
-
-        fs = FilesystemHelper(image_root=tmp_path)
-        extractor = SignerExtractor(fs)
-
-        mock_pe = MagicMock()
-        mock_pe.signatures = []  # No direct signatures
-
-        with (
-            patch("pyrsistencesniper.core.resolver._HAS_LIEF", True),
-            patch(
-                "pyrsistencesniper.core.resolver.lief.PE.parse",
-                return_value=mock_pe,
-            ),
-            patch.object(
-                extractor,
-                "_lookup_in_catalogs",
-                return_value="Catalog Signer",
-            ) as mock_lookup,
-        ):
-            result = extractor.extract("C:\\Windows\\System32\\notepad.exe")
-        (
-            mock_lookup.assert_called_once_with(mock_pe),
-            ("_lookup_in_catalogs should be called when no direct signature"),
-        )
-        assert result == "Catalog Signer", "Should return result from catalog lookup"
-
-    def test_extract_returns_empty_on_exception(self, tmp_path: Path) -> None:
-        """extract() returns '' when PE parsing raises an exception."""
-        pe_file = tmp_path / "Windows" / "bad.exe"
-        pe_file.parent.mkdir(parents=True, exist_ok=True)
-        pe_file.write_bytes(b"MZ corrupt")
-
-        fs = FilesystemHelper(image_root=tmp_path)
-        extractor = SignerExtractor(fs)
-
-        with (
-            patch("pyrsistencesniper.core.resolver._HAS_LIEF", True),
-            patch(
-                "pyrsistencesniper.core.resolver.lief.PE.parse",
-                side_effect=RuntimeError("parse failed"),
-            ),
-        ):
-            result = extractor.extract("C:\\Windows\\bad.exe")
-        assert result == "", (
-            "Should return empty string when PE parsing raises exception"
-        )
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_leaves_existence_unknown_for_bare_package_name(
+    _mock_signer: MagicMock,
+) -> None:
+    """A package name with no extension is not a path, so existence stays unknown."""
+    pipeline = _make_pipeline(exists=False)
+    assert pipeline.resolve(Finding(value="msv1_0")).exists is None
 
 
-class TestCatalogLoading:
-    """Tests for catalog file loading and caching."""
-
-    def test_load_catalog_data_returns_empty_for_missing_dir(
-        self, tmp_path: Path
-    ) -> None:
-        """_load_catalog_data returns [] when CatRoot dir does not exist."""
-        fs = FilesystemHelper(image_root=tmp_path)
-        extractor = SignerExtractor(fs)
-        result = extractor._load_catalog_data()
-        assert result == [], "Should return empty list when CatRoot directory missing"
-
-    def test_load_catalog_data_reads_cat_files(self, tmp_path: Path) -> None:
-        """_load_catalog_data reads .cat files from the CatRoot directory."""
-        cat_dir = (
-            tmp_path
-            / "Windows"
-            / "System32"
-            / "CatRoot"
-            / "{F750E6C3-38EE-11D1-85E5-00C04FC295EE}"
-        )
-        cat_dir.mkdir(parents=True)
-        (cat_dir / "test1.cat").write_bytes(b"catalog-data-1")
-        (cat_dir / "test2.cat").write_bytes(b"catalog-data-2")
-
-        fs = FilesystemHelper(image_root=tmp_path)
-        extractor = SignerExtractor(fs)
-        result = extractor._load_catalog_data()
-        assert len(result) == 2, "Should read both .cat files"
-        assert b"catalog-data-1" in result, "Should contain first catalog data"
-        assert b"catalog-data-2" in result, "Should contain second catalog data"
-
-    def test_catalog_data_cached_on_second_call(self, tmp_path: Path) -> None:
-        """_get_catalog_data returns cached data without re-reading."""
-        cat_dir = (
-            tmp_path
-            / "Windows"
-            / "System32"
-            / "CatRoot"
-            / "{F750E6C3-38EE-11D1-85E5-00C04FC295EE}"
-        )
-        cat_dir.mkdir(parents=True)
-        (cat_dir / "cached.cat").write_bytes(b"cached-data")
-
-        fs = FilesystemHelper(image_root=tmp_path)
-        extractor = SignerExtractor(fs)
-
-        first_call = extractor._get_catalog_data()
-        # Remove the file to prove caching
-        (cat_dir / "cached.cat").unlink()
-        second_call = extractor._get_catalog_data()
-
-        assert first_call is second_call, (
-            "Second call should return same cached list object"
-        )
-        assert len(second_call) == 1, "Cached data should still have original entry"
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_reports_missing_file_for_absolute_path(
+    _mock_signer: MagicMock,
+) -> None:
+    """An absolute path that is absent is a real, reportable negative."""
+    pipeline = _make_pipeline(exists=False)
+    assert pipeline.resolve(Finding(value=r"C:\temp\evil.exe")).exists is False
 
 
-class TestCatalogLookup:
-    """Tests for catalog-based signer lookup."""
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_reports_missing_file_for_bare_filename(
+    _mock_signer: MagicMock,
+) -> None:
+    """A bare filename with an extension is still looked for on disk."""
+    pipeline = _make_pipeline(exists=False)
+    assert pipeline.resolve(Finding(value="ifmon.dll")).exists is False
 
-    def test_lookup_in_catalogs_returns_empty_without_asn1(
-        self, tmp_path: Path
-    ) -> None:
-        """_lookup_in_catalogs returns '' when asn1crypto is not available."""
-        fs = FilesystemHelper(image_root=tmp_path)
-        extractor = SignerExtractor(fs)
 
-        mock_pe = MagicMock()
-        with patch("pyrsistencesniper.core.resolver._HAS_ASN1", False):
-            result = extractor._lookup_in_catalogs(mock_pe)
-        assert result == "", "Should return empty string when asn1crypto unavailable"
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_uses_resolve_target_when_set(
+    _mock_signer: MagicMock, tmp_path: Path
+) -> None:
+    """A plugin that flags the artifact itself names it via resolve_target."""
+    target = tmp_path / "ProgramData" / "Startup" / "evil.lnk"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"MZ")
+    pipeline = ResolutionPipeline(FilesystemHelper(image_root=tmp_path))
+
+    finding = Finding(
+        path="ProgramData\\Startup\\evil.lnk",
+        value="evil.lnk",
+        resolve_target="ProgramData\\Startup\\evil.lnk",
+    )
+    resolved = pipeline.resolve(finding)
+    assert resolved.exists is True
+    assert resolved.sha256
+
+
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_never_hashes_the_artifact_for_cmdline_values(
+    _mock_signer: MagicMock, tmp_path: Path
+) -> None:
+    """A missing referenced binary is a NOT_FOUND, not a hash of the task XML."""
+    artifact = tmp_path / "Windows" / "System32" / "Tasks" / "EvilTask"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("<Task/>")
+    pipeline = ResolutionPipeline(FilesystemHelper(image_root=tmp_path))
+
+    finding = Finding(
+        path="Windows\\System32\\Tasks\\EvilTask",
+        value=r"C:\Program Files\evil\evil.exe --run",
+    )
+    resolved = pipeline.resolve(finding)
+    assert resolved.exists is False
+    assert resolved.sha256 == ""
+
+
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_leaves_marker_values_unresolved(
+    _mock_signer: MagicMock, tmp_path: Path
+) -> None:
+    """A non-path marker value stays unresolved even when the artifact exists."""
+    artifact = (
+        tmp_path / "Windows" / "System32" / "wbem" / "Repository" / "OBJECTS.DATA"
+    )
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"CIM")
+    pipeline = ResolutionPipeline(FilesystemHelper(image_root=tmp_path))
+
+    finding = Finding(
+        path="Windows\\System32\\wbem\\Repository\\OBJECTS.DATA",
+        value="CommandLineEventConsumer (class reference)",
+    )
+    resolved = pipeline.resolve(finding)
+    assert resolved.exists is None
+    assert resolved.sha256 == ""
+
+
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_finds_bare_name_in_windows_dir(
+    _mock_signer: MagicMock, tmp_path: Path
+) -> None:
+    """A bare filename living beside the OS binaries is still found and hashed."""
+    target = tmp_path / "Windows" / "explorer.exe"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"MZ")
+    pipeline = ResolutionPipeline(FilesystemHelper(image_root=tmp_path))
+
+    finding = Finding(path="HKLM\\SOFTWARE\\Winlogon\\Shell", value="explorer.exe")
+    assert pipeline.resolve(finding).exists is True
+
+
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_flags_lolbin_launcher_of_a_plain_payload(
+    _mock_signer: MagicMock,
+) -> None:
+    """Adding an argument must not make a finding less suspicious than the bare tool."""
+    pipeline = _make_pipeline()
+    resolved = pipeline.resolve(
+        Finding(value=r"rundll32.exe C:\Users\Public\evil.dll,Start")
+    )
+    assert resolved.is_lolbin is True
+    assert resolved.launcher == "rundll32.exe"
+
+
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_flags_powershell_launcher(_mock_signer: MagicMock) -> None:
+    """PowerShell is absent from LOLBAS but is the commonest launcher in the wild."""
+    pipeline = _make_pipeline()
+    resolved = pipeline.resolve(
+        Finding(value=r"powershell.exe -w hidden -File C:\Users\Public\evil.ps1")
+    )
+    assert resolved.is_lolbin is True
+    assert resolved.launcher == "powershell.exe"
+
+
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_still_inspects_the_payload_not_the_launcher(
+    _mock_signer: MagicMock,
+) -> None:
+    """The launcher is recorded, but the payload is what gets hashed and signed."""
+    pipeline = _make_pipeline(exists=True, sha256="abc123")
+    resolved = pipeline.resolve(
+        Finding(value=r"rundll32.exe C:\Users\Public\evil.dll,Start")
+    )
+    assert resolved.sha256 == "abc123"
+    assert resolved.exists is True
+
+
+@patch("pyrsistencesniper.core.signer.SignerExtractor.extract", return_value="")
+def test_resolve_records_no_launcher_for_a_direct_image(
+    _mock_signer: MagicMock,
+) -> None:
+    """An ordinary program is not proxying, so the launcher column stays empty."""
+    pipeline = _make_pipeline()
+    resolved = pipeline.resolve(Finding(value=r"C:\Program Files\App\app.exe --flag"))
+    assert resolved.launcher == ""
+    assert resolved.is_lolbin is False
