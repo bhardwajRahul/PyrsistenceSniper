@@ -1,33 +1,81 @@
-"""Detect Group Policy script persistence via scripts.ini and psscripts.ini (T1037.001).
-
-Group Policy scripts.ini and psscripts.ini define startup/shutdown and
-logon/logoff scripts.  Malicious CmdLine entries provide boot-level or
-logon-level persistence through the Group Policy infrastructure.
-"""
+"""Detect Group Policy script persistence via scripts.ini and psscripts.ini."""
 
 from __future__ import annotations
 
-import configparser
-import logging
+import codecs
+import re
 from pathlib import Path, PureWindowsPath
 
+from pyrsistencesniper.core.filesystem import safe_is_dir, safe_is_file, safe_iterdir
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
     Finding,
 )
+from pyrsistencesniper.core.registry import record_artifact_failure
+from pyrsistencesniper.core.windows import _io_path
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
-logger = logging.getLogger(__name__)
-
 _GP_DIR = Path("Windows") / "System32" / "GroupPolicy"
-_SCRIPT_FILES: tuple[tuple[Path, str], ...] = (
-    (Path("Machine") / "Scripts" / "scripts.ini", "Machine"),
-    (Path("Machine") / "Scripts" / "psscripts.ini", "Machine (PowerShell)"),
-    (Path("User") / "Scripts" / "scripts.ini", "User"),
-    (Path("User") / "Scripts" / "psscripts.ini", "User (PowerShell)"),
+_GP_USERS_DIR = Path("Windows") / "System32" / "GroupPolicyUsers"
+
+_PER_USER_SCRIPT_FILES: tuple[tuple[Path, str, AccessLevel], ...] = (
+    (Path("User") / "Scripts" / "scripts.ini", "User", AccessLevel.USER),
+    (Path("User") / "Scripts" / "psscripts.ini", "User (PowerShell)", AccessLevel.USER),
 )
+
+_SCRIPT_FILES: tuple[tuple[Path, str, AccessLevel], ...] = (
+    (Path("Machine") / "Scripts" / "scripts.ini", "Machine", AccessLevel.SYSTEM),
+    (
+        Path("Machine") / "Scripts" / "psscripts.ini",
+        "Machine (PowerShell)",
+        AccessLevel.SYSTEM,
+    ),
+    *_PER_USER_SCRIPT_FILES,
+)
+
+_SECTION_PATTERN = re.compile(r"^\[(?P<name>[^\]]*)\]")
+_COMMENT_PREFIXES: tuple[str, ...] = (";", "#")
+
+
+def _decode_ini_text(raw_bytes: bytes) -> str:
+    """Decode INI bytes the way Windows' own profile parser tolerates them."""
+    if raw_bytes.startswith(codecs.BOM_UTF8):
+        return raw_bytes.decode("utf-8-sig")
+    if raw_bytes.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return raw_bytes.decode("utf-16")
+    if b"\x00" in raw_bytes:
+        return raw_bytes.decode("utf-16", errors="replace")
+    try:
+        return raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw_bytes.decode("cp1252", errors="replace")
+
+
+def _parse_ini_text(text: str) -> tuple[dict[str, list[tuple[str, str]]], list[int]]:
+    """Split INI text into per-section pairs, naming the lines that would not parse."""
+    sections: dict[str, list[tuple[str, str]]] = {}
+    unreadable_lines: list[int] = []
+    current_section: list[tuple[str, str]] | None = None
+
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith(_COMMENT_PREFIXES):
+            continue
+        section_match = _SECTION_PATTERN.match(line)
+        if section_match is not None:
+            current_section = sections.setdefault(
+                section_match.group("name").strip(), []
+            )
+            continue
+        key_name, separator, raw_value = line.partition("=")
+        if not separator or not key_name.strip() or current_section is None:
+            unreadable_lines.append(line_number)
+            continue
+        current_section.append((key_name.strip(), raw_value.strip()))
+
+    return sections, unreadable_lines
 
 
 @register_plugin
@@ -40,81 +88,87 @@ class GpScripts(PersistencePlugin):
         mitre_id="T1037.001",
         description=(
             "Group Policy scripts.ini and psscripts.ini define "
-            "startup/shutdown and logon/logoff scripts. Malicious CmdLine "
-            "entries provide boot-level or logon-level persistence via "
-            "the GP infrastructure."
+            "startup/shutdown and logon/logoff scripts, so a CmdLine entry "
+            "runs at boot or at logon. The machine-wide local GPO and every "
+            "per-user local GPO under GroupPolicyUsers are read."
         ),
         references=("https://attack.mitre.org/techniques/T1037/001/",),
     )
 
     def run(self) -> list[Finding]:
-        """Scan Group Policy scripts.ini and psscripts.ini for CmdLine entries."""
+        """Scan the machine and per-user local GPO script files for CmdLine entries."""
         findings: list[Finding] = []
 
-        group_policy_dir = self.filesystem.image_root / _GP_DIR
-        if not group_policy_dir.is_dir():
-            return findings
+        if safe_is_dir(self.filesystem.image_root / _GP_DIR):
+            for relative_path, scope_label, access in _SCRIPT_FILES:
+                self._scan_ini_file(
+                    _GP_DIR / relative_path, scope_label, access, findings
+                )
 
-        for relative_path, scope_label in _SCRIPT_FILES:
-            ini_file_path = group_policy_dir / relative_path
-            if not ini_file_path.is_file():
-                continue
-
-            self._parse_ini_file(ini_file_path, relative_path, scope_label, findings)
+        for account_sid in self._local_gpo_accounts():
+            for relative_path, scope_label, access in _PER_USER_SCRIPT_FILES:
+                self._scan_ini_file(
+                    _GP_USERS_DIR / account_sid / relative_path,
+                    f"{scope_label}, local GPO for {account_sid}",
+                    access,
+                    findings,
+                )
 
         return findings
 
-    def _parse_ini_file(
+    def _local_gpo_accounts(self) -> list[str]:
+        """Return the account each per-user local GPO directory is named after."""
+        gp_users_dir = self.filesystem.image_root / _GP_USERS_DIR
+        if not safe_is_dir(gp_users_dir):
+            return []
+        return sorted(
+            entry.name for entry in safe_iterdir(gp_users_dir) if safe_is_dir(entry)
+        )
+
+    def _scan_ini_file(
         self,
-        ini_file_path: Path,
         relative_path: Path,
         scope_label: str,
+        access: AccessLevel,
         findings: list[Finding],
     ) -> None:
-        """Parse a single INI file and append any CmdLine findings."""
-        config = configparser.ConfigParser(interpolation=None)
-
-        for encoding in ("utf-16", "utf-8-sig", "utf-8"):
-            try:
-                config.read(str(ini_file_path), encoding=encoding)
-                break
-            except Exception:
-                logger.debug(
-                    "Failed to read INI with %s encoding: %s",
-                    encoding,
-                    ini_file_path,
-                    exc_info=True,
-                )
-                config.clear()
-        else:
-            logger.debug("All encoding attempts failed for INI file: %s", ini_file_path)
+        """Parse one Group Policy INI file and append the CmdLine entries it holds."""
+        ini_file_path = self.filesystem.image_root / relative_path
+        if not safe_is_file(ini_file_path):
             return
 
-        for section_name in config.sections():
+        try:
+            raw_bytes = _io_path(ini_file_path).read_bytes()
+        except OSError as error:
+            record_artifact_failure(self.definition.id, ini_file_path, error)
+            return
+
+        sections, unreadable_lines = _parse_ini_text(_decode_ini_text(raw_bytes))
+        if unreadable_lines:
+            record_artifact_failure(
+                self.definition.id,
+                ini_file_path,
+                "no key=value pair could be read from line(s) "
+                + ", ".join(str(number) for number in unreadable_lines),
+            )
+
+        for section_items in sections.values():
             self._extract_cmdline_entries(
-                config, section_name, relative_path, scope_label, findings
+                section_items, relative_path, scope_label, access, findings
             )
 
     def _extract_cmdline_entries(
         self,
-        config: configparser.ConfigParser,
-        section_name: str,
+        section_items: list[tuple[str, str]],
         relative_path: Path,
         scope_label: str,
+        access: AccessLevel,
         findings: list[Finding],
     ) -> None:
         """Extract CmdLine entries from an INI section."""
-        try:
-            section_items = list(config.items(section_name))
-        except Exception:
-            logger.debug(
-                "Failed to read INI section %s",
-                section_name,
-                exc_info=True,
-            )
-            return
-
-        key_value_map = {key.lower(): value for key, value in section_items}
+        key_value_map: dict[str, str] = {}
+        for key_name, raw_value in section_items:
+            key_value_map.setdefault(key_name.lower(), raw_value)
 
         for key_name, raw_value in section_items:
             key_lower = key_name.lower()
@@ -128,16 +182,11 @@ class GpScripts(PersistencePlugin):
                 f"{command_line} {parameters}".strip() if parameters else command_line
             )
 
-            access_level = (
-                AccessLevel.SYSTEM
-                if scope_label.startswith("Machine")
-                else AccessLevel.USER
-            )
             findings.append(
                 self._make_finding(
-                    path=str(PureWindowsPath(_GP_DIR / relative_path)),
+                    path=str(PureWindowsPath(relative_path)),
                     value=full_command,
-                    access=access_level,
+                    access=access,
                     description=(
                         f"{self.definition.description} (scope: {scope_label})"
                     ),

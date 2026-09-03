@@ -1,7 +1,4 @@
-"""Tests for the PowerAutomate plugin (T1546).
-
-Detects Power Automate Desktop flow directories under user profiles.
-"""
+"""Tests for the PowerAutomate plugin (T1546)."""
 
 from __future__ import annotations
 
@@ -14,7 +11,7 @@ from .conftest import make_deps
 
 
 def _flows_dir(tmp_path: Path, username: str) -> Path:
-    """Return the expected Power Automate flows directory for a user."""
+    """Return the Flows directory Power Automate Desktop runs from."""
     return (
         tmp_path
         / "Users"
@@ -31,12 +28,13 @@ def _make_plugin(
     tmp_path: Path,
     user_profiles: list[UserProfile] | None = None,
 ) -> PowerAutomate:
-    context, _registry, _fs, _profile = make_deps(tmp_path, user_profiles=user_profiles)
+    """Build a PowerAutomate plugin that sees only the given user profiles."""
+    context, _registry, _filesystem = make_deps(tmp_path, user_profiles=user_profiles)
     return PowerAutomate(context=context)
 
 
 def test_flow_directory_detected(tmp_path: Path) -> None:
-    """A flow subdirectory under Flows produces a finding."""
+    """Each subdirectory under Flows is a flow the desktop agent can run."""
     flows = _flows_dir(tmp_path, "victim")
     (flows / "MaliciousFlow").mkdir(parents=True)
 
@@ -50,7 +48,7 @@ def test_flow_directory_detected(tmp_path: Path) -> None:
 
 
 def test_no_flows_directory(tmp_path: Path) -> None:
-    """User profile without a Flows directory produces no findings."""
+    """A profile that never installed Power Automate has no Flows folder."""
     profiles = [UserProfile("clean", tmp_path / "Users" / "clean")]
     plugin = _make_plugin(tmp_path, user_profiles=profiles)
 
@@ -59,7 +57,7 @@ def test_no_flows_directory(tmp_path: Path) -> None:
 
 
 def test_files_in_flows_ignored(tmp_path: Path) -> None:
-    """Regular files inside Flows are not flagged — only subdirectories."""
+    """Regular files inside Flows are not flagged, only subdirectories."""
     flows = _flows_dir(tmp_path, "victim")
     flows.mkdir(parents=True)
     (flows / "readme.txt").write_text("not a flow")
@@ -72,7 +70,7 @@ def test_files_in_flows_ignored(tmp_path: Path) -> None:
 
 
 def test_multiple_users_multiple_flows(tmp_path: Path) -> None:
-    """Flows across multiple user profiles all produce findings."""
+    """Each profile carries its own flows, so every profile is scanned."""
     for username, flow_name in [("alice", "FlowA"), ("bob", "FlowB")]:
         ((_flows_dir(tmp_path, username)) / flow_name).mkdir(parents=True)
 
@@ -84,12 +82,12 @@ def test_multiple_users_multiple_flows(tmp_path: Path) -> None:
 
     findings = plugin.run()
     assert len(findings) == 2
-    values = {f.value for f in findings}
+    values = {finding.value for finding in findings}
     assert values == {"FlowA", "FlowB"}
 
 
 def test_no_user_profiles(tmp_path: Path) -> None:
-    """No user profiles produces no findings."""
+    """An image with no collected profiles has no flow directory to walk."""
     plugin = _make_plugin(tmp_path, user_profiles=[])
 
     findings = plugin.run()

@@ -1,9 +1,10 @@
+"""Detection for Power Automate Desktop Flows."""
+
 from __future__ import annotations
 
-import logging
 from pathlib import Path, PureWindowsPath
 
-from pyrsistencesniper.core.filesystem import safe_iterdir
+from pyrsistencesniper.core.filesystem import safe_is_dir, safe_iterdir
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
@@ -12,11 +13,11 @@ from pyrsistencesniper.core.models import (
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
-logger = logging.getLogger(__name__)
-
 
 @register_plugin
 class PowerAutomate(PersistencePlugin):
+    """Detects Power Automate Desktop Flows persistence entries."""
+
     definition = CheckDefinition(
         id="power_automate",
         technique="Power Automate Desktop Flows",
@@ -30,10 +31,11 @@ class PowerAutomate(PersistencePlugin):
     )
 
     def run(self) -> list[Finding]:
+        """Report every desktop flow and script stored under a user's profile."""
         findings: list[Finding] = []
 
         for profile in self.context.user_profiles:
-            pa_base = (
+            power_automate_root = (
                 self.filesystem.image_root
                 / "Users"
                 / profile.username
@@ -43,13 +45,14 @@ class PowerAutomate(PersistencePlugin):
                 / "Power Automate Desktop"
             )
 
-            self._scan_directory(pa_base / "Flows", findings)
-            self._scan_directory(pa_base / "Scripts", findings)
+            self._scan_directory(power_automate_root / "Flows", findings)
+            self._scan_directory(power_automate_root / "Scripts", findings)
 
         return findings
 
     def _scan_directory(self, directory: Path, findings: list[Finding]) -> None:
-        if not directory.is_dir():
+        """Report every subdirectory of one Power Automate store."""
+        if not safe_is_dir(directory):
             return
         findings.extend(
             self._make_finding(
@@ -60,5 +63,5 @@ class PowerAutomate(PersistencePlugin):
                 access=AccessLevel.USER,
             )
             for entry in safe_iterdir(directory)
-            if entry.is_dir()
+            if safe_is_dir(entry)
         )
