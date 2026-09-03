@@ -1,7 +1,10 @@
+"""Tests for the PrintMonitors and PrintProcessors plugins (T1547.010/.012)."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
 from pyrsistencesniper.core.models import AccessLevel
 from pyrsistencesniper.plugins.T1547.print_monitors import (
     PrintMonitors,
@@ -13,60 +16,44 @@ from .conftest import make_node, make_plugin, setup_hklm
 if TYPE_CHECKING:
     from pathlib import Path
 
-
-class TestPrintMonitors:
-    def test_happy_path(self, tmp_path: Path) -> None:
-        child = make_node(name="EvilMon", values={"Driver": "evil_mon.dll"})
-        tree = make_node(children={"EvilMon": child})
-        p = make_plugin(PrintMonitors, tmp_path)
-        setup_hklm(p, tree, hive_path="/fake/SYSTEM")
-        findings = p.run()
-        assert len(findings) == 1
-        assert "evil_mon.dll" in findings[0].value
-        assert findings[0].access_gained == AccessLevel.SYSTEM
-        assert "T1547.010" in findings[0].mitre_id
-
-    def test_missing_driver_skipped(self, tmp_path: Path) -> None:
-        child = make_node(name="SomeMon", values={"Other": "data"})
-        tree = make_node(children={"SomeMon": child})
-        p = make_plugin(PrintMonitors, tmp_path)
-        setup_hklm(p, tree, hive_path="/fake/SYSTEM")
-        assert p.run() == []
-
-    def test_no_subtree(self, tmp_path: Path) -> None:
-        p = make_plugin(PrintMonitors, tmp_path)
-        p.context.hive_path.return_value = None
-        assert p.run() == []
-
-    def test_multiple_monitors(self, tmp_path: Path) -> None:
-        child_a = make_node(name="MonA", values={"Driver": "a.dll"})
-        child_b = make_node(name="MonB", values={"Driver": "b.dll"})
-        tree = make_node(children={"MonA": child_a, "MonB": child_b})
-        p = make_plugin(PrintMonitors, tmp_path)
-        setup_hklm(p, tree, hive_path="/fake/SYSTEM")
-        findings = p.run()
-        assert len(findings) == 2
+_HAPPY_CASES: list[tuple[type, str, str]] = [
+    (PrintMonitors, "evil_mon.dll", "T1547.010"),
+    (PrintProcessors, "evil_proc.dll", "T1547.012"),
+]
 
 
-class TestPrintProcessors:
-    def test_happy_path(self, tmp_path: Path) -> None:
-        child = make_node(name="EvilProc", values={"Driver": "evil_proc.dll"})
-        tree = make_node(children={"EvilProc": child})
-        p = make_plugin(PrintProcessors, tmp_path)
-        setup_hklm(p, tree, hive_path="/fake/SYSTEM")
-        findings = p.run()
-        assert len(findings) >= 1
-        assert any("evil_proc.dll" in f.value for f in findings)
-        assert all(f.access_gained == AccessLevel.SYSTEM for f in findings)
+@pytest.mark.parametrize(
+    ("plugin_cls", "driver_dll", "mitre_id"),
+    _HAPPY_CASES,
+    ids=[case[0].__name__ for case in _HAPPY_CASES],
+)
+def test_happy_path(
+    tmp_path: Path,
+    plugin_cls: type,
+    driver_dll: str,
+    mitre_id: str,
+) -> None:
+    """Each plugin flags a subkey carrying a Driver value."""
+    child = make_node(name="EvilEntry", values={"Driver": driver_dll})
+    tree = make_node(children={"EvilEntry": child})
+    plugin = make_plugin(plugin_cls, tmp_path)
+    setup_hklm(plugin, tree, hive_path="/fake/SYSTEM")
+    findings = plugin.run()
+    assert len(findings) >= 1
+    assert any(driver_dll in finding.value for finding in findings)
+    assert all(finding.access_gained == AccessLevel.SYSTEM for finding in findings)
+    assert all(mitre_id in finding.mitre_id for finding in findings)
 
-    def test_missing_driver_skipped(self, tmp_path: Path) -> None:
-        child = make_node(name="SomeProc", values={"Other": "data"})
-        tree = make_node(children={"SomeProc": child})
-        p = make_plugin(PrintProcessors, tmp_path)
-        setup_hklm(p, tree, hive_path="/fake/SYSTEM")
-        assert p.run() == []
 
-    def test_no_subtree(self, tmp_path: Path) -> None:
-        p = make_plugin(PrintProcessors, tmp_path)
-        p.context.hive_path.return_value = None
-        assert p.run() == []
+@pytest.mark.parametrize(
+    "plugin_cls",
+    [PrintMonitors, PrintProcessors],
+    ids=lambda cls: cls.__name__,
+)
+def test_missing_driver_skipped(tmp_path: Path, plugin_cls: type) -> None:
+    """A subkey without a Driver value produces no findings."""
+    child = make_node(name="SomeEntry", values={"Other": "data"})
+    tree = make_node(children={"SomeEntry": child})
+    plugin = make_plugin(plugin_cls, tmp_path)
+    setup_hklm(plugin, tree, hive_path="/fake/SYSTEM")
+    assert plugin.run() == []

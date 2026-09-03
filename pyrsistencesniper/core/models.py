@@ -5,6 +5,7 @@ from __future__ import annotations
 import enum
 import re
 from dataclasses import dataclass, field
+from functools import total_ordering
 from pathlib import Path
 from typing import ClassVar, Protocol, TypeAlias
 
@@ -16,6 +17,7 @@ class UserProfile:
     username: str
     profile_path: Path
     ntuser_path: Path | None = None
+    usrclass_path: Path | None = None
 
 
 class AccessLevel(enum.Enum):
@@ -25,41 +27,73 @@ class AccessLevel(enum.Enum):
     SYSTEM = "SYSTEM"
 
 
+class HiveStatus(enum.Enum):
+    """Outcome of an attempt to open a registry hive."""
+
+    OPENED = "OPENED"
+    REPAIRED = "REPAIRED"
+    OPEN_FAILED = "OPEN_FAILED"
+    NOT_READ = "NOT_READ"
+    NOT_COLLECTED = "NOT_COLLECTED"
+
+
+ESSENTIAL_HIVES: frozenset[str] = frozenset({"SOFTWARE", "SYSTEM"})
+
+
+@dataclass(frozen=True, slots=True)
+class HiveRecord:
+    """One hive the scan expected, and what became of it."""
+
+    name: str = ""
+    owner: str = ""
+    path: str = ""
+    status: HiveStatus = HiveStatus.NOT_COLLECTED
+    dirty: bool = False
+    error: str = ""
+
+    @property
+    def cost_checks(self) -> bool:
+        """Report whether this hive's state removed checks from the scan."""
+        # SAM, SECURITY, DEFAULT and AMCACHE are absent from most collections by
+        # design, so a missing one costs nothing unless a check depends on it.
+        if self.status is HiveStatus.OPEN_FAILED:
+            return True
+        return self.status is HiveStatus.NOT_COLLECTED and self.name in ESSENTIAL_HIVES
+
+
+@dataclass(frozen=True, slots=True)
+class CheckFailure:
+    """One check that raised and therefore contributed no findings to the scan."""
+
+    check_id: str = ""
+    error: str = ""
+
+
+class ChangeEvidence(enum.Enum):
+    """Why a finding's last-change column holds what it holds."""
+
+    NOT_RUN = "NOT_RUN"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    NO_ARTIFACT = "NO_ARTIFACT"
+    NO_MATCH = "NO_MATCH"
+    REJECTED = "REJECTED"
+    RESOLVED = "RESOLVED"
+
+
+@total_ordering
 class Severity(enum.Enum):
-    """Classification of a finding based on allow/block rule matching."""
+    """Finding classification, ordered by declaration: INFO < LOW < MEDIUM < HIGH."""
 
     INFO = "INFO"
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
 
-    def __ge__(self, other: Severity) -> bool:
-        if not isinstance(other, Severity):
-            return NotImplemented
-        return _SEVERITY_RANK[self] >= _SEVERITY_RANK[other]
-
-    def __gt__(self, other: Severity) -> bool:
-        if not isinstance(other, Severity):
-            return NotImplemented
-        return _SEVERITY_RANK[self] > _SEVERITY_RANK[other]
-
-    def __le__(self, other: Severity) -> bool:
-        if not isinstance(other, Severity):
-            return NotImplemented
-        return _SEVERITY_RANK[self] <= _SEVERITY_RANK[other]
-
     def __lt__(self, other: Severity) -> bool:
         if not isinstance(other, Severity):
             return NotImplemented
-        return _SEVERITY_RANK[self] < _SEVERITY_RANK[other]
-
-
-_SEVERITY_RANK: dict[Severity, int] = {
-    Severity.INFO: 0,
-    Severity.LOW: 1,
-    Severity.MEDIUM: 2,
-    Severity.HIGH: 3,
-}
+        members = list(Severity)
+        return members.index(self) < members.index(other)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +108,11 @@ class Finding:
         "description": "Description",
         "access_gained": "Access Gained",
         "severity": "Severity",
+        "last_change": "Last Change",
+        "change_source": "Change Source",
+        "change_evidence": "Change Evidence",
         "is_lolbin": "LOLBin",
+        "launcher": "Launcher",
         "exists": "Exists",
         "sha256": "SHA256",
         "is_builtin": "Builtin",
@@ -92,6 +130,8 @@ class Finding:
     description: str = ""
     access_gained: AccessLevel = AccessLevel.USER
     is_lolbin: bool | None = None
+    # The launcher the value proxies through, empty when it runs its image directly
+    launcher: str = ""
     exists: bool | None = None
     sha256: str = ""
     is_builtin: bool | None = None
@@ -101,6 +141,15 @@ class Finding:
     check_id: str = ""
     references: tuple[str, ...] = field(default_factory=tuple)
     severity: Severity = Severity.MEDIUM
+    last_change: str = ""
+    change_source: str = ""
+    change_evidence: ChangeEvidence = ChangeEvidence.NOT_RUN
+    # Not in FIELDS: names the file resolution inspects, never a report column
+    resolve_target: str = ""
+    # Not in FIELDS: evidence descriptors the timeline stage resolves
+    time_evidence: tuple[TimeEvidence, ...] = field(default_factory=tuple)
+    # Not in FIELDS: every candidate considered, HTML tooltip only
+    change_candidates: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +168,10 @@ class MatchResult(enum.Enum):
     FULL = "FULL"
 
 
+# A PARTIAL allow match lands on LOW, below the default --min-severity of
+# medium, so the finding is filtered out of the report. That is deliberate: an
+# allow rule whose only failing condition is the signer still suppresses by
+# default, while --min-severity low brings the finding back for review.
 MATCH_TO_SEVERITY: dict[MatchResult, Severity] = {
     MatchResult.NONE: Severity.MEDIUM,
     MatchResult.PARTIAL: Severity.LOW,
@@ -138,20 +191,10 @@ class FilterRule:
     not_lolbin: bool = False
 
     def match_result(self, finding: Finding) -> MatchResult:
-        """Classify how well this rule matches the finding.
-
-        Fields are evaluated in two tiers:
-
-        - **Core** (``value_matches``, ``path_matches``, ``hash``,
-          ``not_lolbin``): every specified core field must pass or the
-          result is ``NONE``.
-        - **Signer** is a *soft* condition: when all core fields pass but
-          the signer check fails the result degrades to ``PARTIAL``
-          instead of ``NONE``.  This avoids penalising a finding just
-          because a legitimate binary happens to be unsigned.
-
-        Returns ``NONE`` when no conditions are specified.
-        """
+        """Classify how well this rule matches the finding."""
+        # NONE when the rule states no conditions. Signer is a soft condition:
+        # it degrades the result to PARTIAL rather than NONE, so an unsigned but
+        # otherwise legitimate binary keeps its allowlist match.
         core_pass: list[bool] = []
 
         if self.not_lolbin:
@@ -200,11 +243,7 @@ class KeyProtocol(Protocol):
 
 
 class HiveProtocol(Protocol):
-    """Structural type for registry hive file handles.
-
-    Matches the interface of pyregf.file that the codebase actually uses,
-    without coupling to the C extension at import time.
-    """
+    """Structural type for registry hive file handles (pyregf.file)."""
 
     def get_key_by_path(self, path: str) -> KeyProtocol | None:
         """Resolve a registry key by its backslash-delimited path."""
@@ -227,6 +266,28 @@ class RegistryTarget:
     values: str = "*"
     scope: HiveScope = HiveScope.BOTH
     recurse: bool = False
+    include_wow64: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class FileWriteTime:
+    """Time evidence: the $MFT record of a file inside the image."""
+
+    path: str = ""
+    weak: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class EventLogTime:
+    """Time evidence: matching records in an event log channel."""
+
+    channel: str = ""
+    event_ids: tuple[int, ...] = field(default_factory=tuple)
+    match_field: str = ""
+    match_value: str = ""
+
+
+TimeEvidence: TypeAlias = FileWriteTime | EventLogTime
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,5 +300,3 @@ class CheckDefinition:
     description: str = ""
     targets: tuple[RegistryTarget, ...] = field(default_factory=tuple)
     references: tuple[str, ...] = field(default_factory=tuple)
-    allow: tuple[FilterRule, ...] = field(default_factory=tuple)
-    block: tuple[FilterRule, ...] = field(default_factory=tuple)

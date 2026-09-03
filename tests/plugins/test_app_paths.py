@@ -17,25 +17,25 @@ class TestAppPaths:
     """AppPaths enumerates child keys for (Default) executable paths."""
 
     def test_happy_path_app_with_default_value(self, tmp_path: Path) -> None:
-        """App path child with (Default) value produces a finding."""
+        """An App Paths (Default) names the binary a bare command name launches."""
         child = make_node(
             name="evil.exe",
             values={"(Default)": "C:\\malware\\evil.exe"},
         )
         tree = make_node(children={"evil.exe": child})
-        p = make_plugin(AppPaths, tmp_path)
-        setup_hklm(p, tree)
+        plugin = make_plugin(AppPaths, tmp_path)
+        setup_hklm(plugin, tree)
 
-        findings = p.run()
+        findings = plugin.run()
         assert len(findings) == 1
         assert "evil.exe" in findings[0].value
         assert findings[0].access_gained == AccessLevel.SYSTEM
 
     def test_child_without_default_value(self, tmp_path: Path) -> None:
-        """Child node with no (Default) value is skipped."""
+        """A child key naming no executable launches nothing and is not reported."""
         child = make_node(name="nodefault.exe", values={"Path": "C:\\somewhere"})
         tree = make_node(children={"nodefault.exe": child})
-        p = make_plugin(AppPaths, tmp_path)
-        setup_hklm(p, tree)
+        plugin = make_plugin(AppPaths, tmp_path)
+        setup_hklm(plugin, tree)
 
-        assert p.run() == []
+        assert plugin.run() == []

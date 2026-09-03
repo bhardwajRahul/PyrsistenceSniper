@@ -1,4 +1,3 @@
-from __future__ import annotations
+"""Evidence access and Windows domain knowledge shared by every check."""
 
-from pyrsistencesniper.core.context import AnalysisContext as AnalysisContext
-from pyrsistencesniper.core.context import build_context as build_context
+from __future__ import annotations

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
     Finding,
 )
 from pyrsistencesniper.core.registry import registry_value_to_str
@@ -17,26 +16,17 @@ _SERVICES_PATH_TEMPLATE = r"{controlset}\Services"
 
 @register_plugin
 class ServiceFailureCommand(PersistencePlugin):
+    """Detects Service Failure Command persistence entries."""
+
     definition = CheckDefinition(
         id="service_failure_command",
         technique="Service Failure Command",
         mitre_id="T1543.003",
         description=(
-            "The FailureCommand value specifies a program to run when a "
-            "service fails. Abuse provides persistence triggered by service "
-            "crashes."
+            "The FailureCommand value names a program the service control "
+            "manager runs when the service fails, so a crash triggers it."
         ),
         references=("https://attack.mitre.org/techniques/T1543/003/",),
-        allow=(
-            FilterRule(
-                reason="No failure command configured", value_matches=r"^not used$"
-            ),
-            FilterRule(
-                reason="NVIDIA display container service recovery",
-                value_matches=r"NVIDIA Corporation\\.*\\NvContainerRecovery\.bat",
-                signer="Nvidia",
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
@@ -46,18 +36,19 @@ class ServiceFailureCommand(PersistencePlugin):
         services_path = _SERVICES_PATH_TEMPLATE.replace(
             "{controlset}", self.context.active_controlset
         )
-        tree = self.hive_ops.load_subtree("SYSTEM", services_path)
+        tree = self.context.load_subtree("SYSTEM", services_path)
         if tree is None:
             return findings
 
-        for svc_name, node in tree.children():
+        for service_name, node in tree.children():
             value_str = registry_value_to_str(node.get("FailureCommand"))
             if value_str is None:
                 continue
 
             findings.append(
                 self._make_finding(
-                    path=(f"HKLM\\SYSTEM\\{services_path}\\{svc_name}\\FailureCommand"),
+                    path=f"HKLM\\SYSTEM\\{services_path}\\{service_name}"
+                    "\\FailureCommand",
                     value=value_str,
                     access=AccessLevel.SYSTEM,
                 )

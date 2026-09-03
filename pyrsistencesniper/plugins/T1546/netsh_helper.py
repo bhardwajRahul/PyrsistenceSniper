@@ -1,8 +1,9 @@
+"""Detection for Netsh Helper DLL."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     CheckDefinition,
-    FilterRule,
     HiveScope,
     RegistryTarget,
 )
@@ -12,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class NetshHelper(PersistencePlugin):
+    """Detects Netsh Helper DLL persistence entries."""
+
     definition = CheckDefinition(
         id="netsh_helper",
         technique="Netsh Helper DLL",
@@ -23,18 +26,6 @@ class NetshHelper(PersistencePlugin):
             "network-administration context."
         ),
         references=("https://attack.mitre.org/techniques/T1546/007/",),
-        allow=(
-            FilterRule(
-                reason="Built-in netsh helper",
-                value_matches=(
-                    r"^(ifmon|rasmontr|authfwcfg|dhcpcmonitor|nshdnsclient"
-                    r"|dot3cfg|fwcfg|hnetmon|netiohlp|netprofm|nettrace"
-                    r"|nshhttp|nshipsec|nshwfp|rpcnsh|WcnNetsh|whhelper"
-                    r"|wlancfg|wshelper|wwancfg|peerdistsh)\.dll$"
-                ),
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SOFTWARE\Microsoft\NetSh",

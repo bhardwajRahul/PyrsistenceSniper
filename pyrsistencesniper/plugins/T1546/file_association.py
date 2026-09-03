@@ -1,33 +1,16 @@
-from __future__ import annotations
+"""Detection for File Association Hijacking."""
 
-from pathlib import PureWindowsPath
+from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
     Finding,
     HiveProtocol,
 )
-from pyrsistencesniper.core.registry import registry_value_to_str
-from pyrsistencesniper.core.winutil import SCRIPT_LAUNCHERS, is_lolbin
+from pyrsistencesniper.core.registry import registry_key_join, registry_value_to_str
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
-
-
-def _is_suspicious_handler(cmdline: str) -> bool:
-    """Return True if the handler command invokes a LOLBin or interpreter."""
-    s = cmdline.strip()
-    if s.startswith('"'):
-        end = s.find('"', 1)
-        exe = s[1:end] if end != -1 else s[1:]
-    else:
-        exe = s.split()[0] if s else ""
-    if not exe:
-        return False
-    name = PureWindowsPath(exe).name.lower()
-    return name.removesuffix(".exe") in SCRIPT_LAUNCHERS or is_lolbin(exe)
-
 
 _HIGH_RISK_EXTENSIONS: tuple[str, ...] = (
     ".txt",
@@ -48,6 +31,8 @@ _HIGH_RISK_EXTENSIONS: tuple[str, ...] = (
 
 @register_plugin
 class FileAssociationHijack(PersistencePlugin):
+    """Detects File Association Hijacking persistence entries."""
+
     definition = CheckDefinition(
         id="file_association_hijack",
         technique="File Association Hijacking",
@@ -56,32 +41,32 @@ class FileAssociationHijack(PersistencePlugin):
             "Per-user and system-wide file association command handlers "
             "for high-risk extensions (.txt, .pdf, .doc, .js, .exe, etc.) "
             "are checked. Both direct extension handlers and progid-"
-            "redirected handlers are examined."
+            "redirected handlers are examined. Every registered handler is "
+            "reported: a hijack most often repoints the handler at an "
+            "attacker-dropped executable rather than at an interpreter."
         ),
         references=("https://attack.mitre.org/techniques/T1546/001/",),
-        allow=(
-            FilterRule(
-                reason="Standard system handler",
-                signer="Microsoft",
-                not_lolbin=True,
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
+        """Report the open command behind every high-risk extension, per hive."""
         findings: list[Finding] = []
 
-        hive = self.hive_ops.open_hive("SOFTWARE")
+        hive = self.context.open_hive_by_name("SOFTWARE")
         if hive is not None:
             self._check_hive(
-                hive, "Classes", "HKLM\\SOFTWARE", AccessLevel.SYSTEM, findings
+                hive,
+                "Classes",
+                "HKLM\\SOFTWARE\\Classes",
+                AccessLevel.SYSTEM,
+                findings,
             )
 
-        for profile, uhive in self.hive_ops.iter_usrclass_hives():
+        for profile, uhive in self.context.iter_usrclass_hives():
             self._check_hive(
                 uhive,
-                "Software\\Classes",
-                f"HKU\\{profile.username}",
+                "",
+                f"HKU\\{profile.username}\\Software\\Classes",
                 AccessLevel.USER,
                 findings,
             )
@@ -91,43 +76,61 @@ class FileAssociationHijack(PersistencePlugin):
     def _check_hive(
         self,
         hive: HiveProtocol,
-        classes_prefix: str,
-        path_prefix: str,
+        lookup_prefix: str,
+        display_prefix: str,
         access: AccessLevel,
         findings: list[Finding],
     ) -> None:
-        for ext in _HIGH_RISK_EXTENSIONS:
-            # Direct extension handler
-            cmd_path = f"{classes_prefix}\\{ext}\\shell\\open\\command"
-            node = self.registry.load_subtree(hive, cmd_path)
-            if node is not None:
-                default_val = registry_value_to_str(node.get("(Default)"))
-                if default_val is not None and _is_suspicious_handler(default_val):
-                    findings.append(
-                        self._make_finding(
-                            path=f"{path_prefix}\\{cmd_path}",
-                            value=default_val,
-                            access=access,
-                        )
-                    )
-
-            # Progid indirection: .ext -> progid -> progid\shell\open\command
-            ext_node = self.registry.load_subtree(hive, f"{classes_prefix}\\{ext}")
-            if ext_node is None:
-                continue
-            progid = registry_value_to_str(ext_node.get("(Default)"))
-            if progid is None or "\\" in progid or progid.startswith('"'):
-                continue
-            progid_cmd = f"{classes_prefix}\\{progid}\\shell\\open\\command"
-            progid_node = self.registry.load_subtree(hive, progid_cmd)
-            if progid_node is None:
-                continue
-            progid_val = registry_value_to_str(progid_node.get("(Default)"))
-            if progid_val is not None and _is_suspicious_handler(progid_val):
-                findings.append(
-                    self._make_finding(
-                        path=f"{path_prefix}\\{progid_cmd}",
-                        value=progid_val,
-                        access=access,
-                    )
+        """Report the open command of every class key behind a high-risk extension."""
+        by_path: dict[str, Finding] = {}
+        for extension in _HIGH_RISK_EXTENSIONS:
+            for key_name in self._handler_keys(hive, lookup_prefix, extension):
+                finding = self._handler_finding(
+                    hive, lookup_prefix, display_prefix, key_name, access
                 )
+                if finding is not None:
+                    by_path.setdefault(finding.path, finding)
+        findings.extend(by_path.values())
+
+    def _handler_keys(
+        self,
+        hive: HiveProtocol,
+        lookup_prefix: str,
+        extension: str,
+    ) -> list[str]:
+        """Return the class keys whose open command governs one extension."""
+        keys = [extension]
+        extension_node = self.registry.load_subtree(
+            hive, registry_key_join(lookup_prefix, extension)
+        )
+        if extension_node is None:
+            return keys
+        progid = registry_value_to_str(extension_node.get("(Default)"))
+        if progid is None or "\\" in progid or progid.startswith('"'):
+            return keys
+        keys.append(progid)
+        return keys
+
+    def _handler_finding(
+        self,
+        hive: HiveProtocol,
+        lookup_prefix: str,
+        display_prefix: str,
+        key_name: str,
+        access: AccessLevel,
+    ) -> Finding | None:
+        """Return the open command registered under one class key, if there is one."""
+        suffix = (key_name, "shell", "open", "command")
+        node = self.registry.load_subtree(
+            hive, registry_key_join(lookup_prefix, *suffix)
+        )
+        if node is None:
+            return None
+        command = registry_value_to_str(node.get("(Default)"))
+        if command is None:
+            return None
+        return self._make_finding(
+            path=registry_key_join(display_prefix, *suffix),
+            value=command,
+            access=access,
+        )

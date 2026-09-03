@@ -1,3 +1,5 @@
+"""Detection for DSRM Admin Logon Behavior."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -13,6 +15,8 @@ _DSRM_NETWORK_LOGON = 2
 
 @register_plugin
 class DsrmBackdoor(PersistencePlugin):
+    """Detects DSRM Admin Logon Behavior persistence entries."""
+
     definition = CheckDefinition(
         id="dsrm_backdoor",
         technique="DSRM Admin Logon Behavior",
@@ -26,19 +30,20 @@ class DsrmBackdoor(PersistencePlugin):
     )
 
     def run(self) -> list[Finding]:
+        """Report DsrmAdminLogonBehavior set to network logon in any control set."""
         findings: list[Finding] = []
         key_path = r"Control\Lsa"
-        for cs in ("ControlSet001", "ControlSet002", "CurrentControlSet"):
-            full_path = f"{cs}\\{key_path}"
-            tree = self.hive_ops.load_subtree("SYSTEM", full_path)
+        for controlset_name in ("ControlSet001", "ControlSet002", "CurrentControlSet"):
+            full_path = f"{controlset_name}\\{key_path}"
+            tree = self.context.load_subtree("SYSTEM", full_path)
             if tree is None:
                 continue
-            val = tree.get("DsrmAdminLogonBehavior")
-            if isinstance(val, int) and val == _DSRM_NETWORK_LOGON:
+            behavior = tree.get("DsrmAdminLogonBehavior")
+            if isinstance(behavior, int) and behavior == _DSRM_NETWORK_LOGON:
                 findings.append(
                     self._make_finding(
                         path=f"HKLM\\SYSTEM\\{full_path}\\DsrmAdminLogonBehavior",
-                        value=str(val),
+                        value=str(behavior),
                         access=AccessLevel.SYSTEM,
                     )
                 )

@@ -1,3 +1,5 @@
+"""Detection for Screensaver Hijack."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -11,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class Screensaver(PersistencePlugin):
+    """Detects Screensaver Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="screensaver",
         technique="Screensaver Hijack",
@@ -24,15 +28,16 @@ class Screensaver(PersistencePlugin):
     )
 
     def run(self) -> list[Finding]:
+        """Report the screensaver binary each user profile has configured."""
         findings: list[Finding] = []
 
-        for profile, hive in self.hive_ops.iter_user_hives():
+        for profile, hive in self.context.iter_user_hives():
             node = self.registry.load_subtree(hive, r"Control Panel\Desktop")
-            scr_val = node.get("SCRNSAVE.EXE") if node else None
-            if scr_val is None:
+            screensaver_value = node.get("SCRNSAVE.EXE") if node else None
+            if screensaver_value is None:
                 continue
 
-            value_str = str(scr_val).strip()
+            value_str = str(screensaver_value).strip()
             if not value_str:
                 continue
 

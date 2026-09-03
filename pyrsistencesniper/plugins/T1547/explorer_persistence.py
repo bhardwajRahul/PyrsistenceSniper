@@ -1,9 +1,10 @@
+"""Detection for Explorer autostart, browser helper object, and app key abuse."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
     Finding,
     HiveScope,
     RegistryTarget,
@@ -14,6 +15,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class ExplorerLoad(PersistencePlugin):
+    """Detects Explorer Load Value persistence entries."""
+
     definition = CheckDefinition(
         id="explorer_load",
         technique="Explorer Load Value",
@@ -39,6 +42,8 @@ _BHO_PATH = r"Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects"
 
 @register_plugin
 class ExplorerBrowserHelperObjects(PersistencePlugin):
+    """Detects Browser Helper Objects persistence entries."""
+
     definition = CheckDefinition(
         id="explorer_bho",
         technique="Browser Helper Objects",
@@ -50,19 +55,13 @@ class ExplorerBrowserHelperObjects(PersistencePlugin):
             "persistent in-process code execution."
         ),
         references=("https://attack.mitre.org/techniques/T1547/001/",),
-        allow=(
-            FilterRule(
-                reason="Microsoft Edge IE-to-Edge redirection BHO",
-                value_matches=r"ie_to_edge_bho(_64)?\.dll",
-                signer="Microsoft",
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
+        """Report the DLL behind every registered Browser Helper Object."""
         findings: list[Finding] = []
 
-        hive = self.hive_ops.open_hive("SOFTWARE")
+        hive = self.context.open_hive_by_name("SOFTWARE")
         if hive is None:
             return findings
 
@@ -72,14 +71,12 @@ class ExplorerBrowserHelperObjects(PersistencePlugin):
 
         for clsid, _node in tree.children():
             inproc_path = f"Classes\\CLSID\\{clsid}\\InprocServer32"
-            dll_path = self.hive_ops.resolve_clsid_default(hive, inproc_path)
-
-            display = dll_path or clsid
+            dll_path = self.context.resolve_clsid_default(hive, inproc_path)
 
             findings.append(
                 self._make_finding(
                     path=f"HKLM\\SOFTWARE\\{_BHO_PATH}\\{clsid}",
-                    value=display,
+                    value=dll_path or clsid,
                     access=AccessLevel.SYSTEM,
                 )
             )
@@ -88,10 +85,13 @@ class ExplorerBrowserHelperObjects(PersistencePlugin):
 
 
 _APP_KEY_PATH = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\AppKey"
+_APP_KEY_VALUES: tuple[str, ...] = ("ShellExecute", "Association")
 
 
 @register_plugin
 class ExplorerAppKey(PersistencePlugin):
+    """Detects Explorer AppKey Override persistence entries."""
+
     definition = CheckDefinition(
         id="explorer_app_key",
         technique="Explorer AppKey Override",
@@ -106,9 +106,10 @@ class ExplorerAppKey(PersistencePlugin):
     )
 
     def run(self) -> list[Finding]:
+        """Report the programs AppKey binds to the special keyboard keys."""
         findings: list[Finding] = []
 
-        tree = self.hive_ops.load_subtree(
+        tree = self.context.load_subtree(
             "SOFTWARE",
             r"Microsoft\Windows\CurrentVersion\Explorer\AppKey",
         )
@@ -116,22 +117,14 @@ class ExplorerAppKey(PersistencePlugin):
             return findings
 
         for key_id, node in tree.children():
-            val = node.get("ShellExecute")
-            if val is not None:
+            for value_name in _APP_KEY_VALUES:
+                raw_value = node.get(value_name)
+                if raw_value is None:
+                    continue
                 findings.append(
                     self._make_finding(
-                        path=f"HKLM\\{_APP_KEY_PATH}\\{key_id}\\ShellExecute",
-                        value=str(val),
-                        access=AccessLevel.SYSTEM,
-                    )
-                )
-
-            val = node.get("Association")
-            if val is not None:
-                findings.append(
-                    self._make_finding(
-                        path=f"HKLM\\{_APP_KEY_PATH}\\{key_id}\\Association",
-                        value=str(val),
+                        path=f"HKLM\\{_APP_KEY_PATH}\\{key_id}\\{value_name}",
+                        value=str(raw_value),
                         access=AccessLevel.SYSTEM,
                     )
                 )

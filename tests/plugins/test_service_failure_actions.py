@@ -1,3 +1,5 @@
+"""Tests for the ServiceFailureCommand plugin (T1543.003)."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -14,7 +16,7 @@ from .conftest import make_node, make_plugin, setup_hklm
 
 
 def test_service_failure_command_happy_path(tmp_path: Path) -> None:
-    """Service with FailureCommand produces a finding with correct fields."""
+    """The SCM runs FailureCommand as SYSTEM when the service exits abnormally."""
     child = make_node(name="EvilSvc", values={"FailureCommand": "C:\\evil.exe"})
     tree = make_node(children={"EvilSvc": child})
     plugin = make_plugin(ServiceFailureCommand, tmp_path)
@@ -30,7 +32,7 @@ def test_service_failure_command_happy_path(tmp_path: Path) -> None:
 
 
 def test_services_without_failure_command(tmp_path: Path) -> None:
-    """Services that lack FailureCommand produce no findings."""
+    """Almost every service leaves FailureCommand unset, and that is not a hit."""
     child = make_node(name="NormalSvc", values={"ImagePath": "C:\\svc.exe"})
     tree = make_node(children={"NormalSvc": child})
     plugin = make_plugin(ServiceFailureCommand, tmp_path)

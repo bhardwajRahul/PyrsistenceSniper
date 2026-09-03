@@ -1,30 +1,166 @@
-"""Offline registry hive parsing with caching, built on pyregf."""
+"""Offline registry hive access: pyregf-backed parsing and in-memory key trees."""
 
 from __future__ import annotations
 
+import errno
+import io
 import logging
-from collections.abc import Callable, Iterator
+import struct
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pyregf
 
 from pyrsistencesniper.core.models import (
-    AccessLevel,
-    CheckDefinition,
-    Finding,
+    CheckFailure,
     HiveProtocol,
-    HiveScope,
+    HiveRecord,
+    HiveStatus,
     KeyProtocol,
-    RegistryTarget,
-    UserProfile,
 )
-from pyrsistencesniper.core.winutil import normalize_windows_path
-
-if TYPE_CHECKING:
-    from pyrsistencesniper.core.context import AnalysisContext
+from pyrsistencesniper.core.windows import _io_path
 
 logger = logging.getLogger(__name__)
+
+_MAX_REGISTRY_DEPTH = 64
+
+# RunEx and RunOnceEx do not execute their own values: each command sits in an
+# ordered section subkey below the key, so a flat read of these two reports
+# nothing an attacker actually scheduled.
+_SECTION_KEY_NAMES = frozenset({"runex", "runonceex"})
+
+_REGF_SIGNATURE = b"regf"
+_HIVE_BIN_SIGNATURE = b"hbin"
+_BASE_BLOCK_SIZE = 4096
+_HEADER_SIZE = 512
+_CHECKSUM_OFFSET = 508
+_SEQUENCE_OFFSET = 4
+_SECONDARY_SEQUENCE_OFFSET = 8
+_BINS_SIZE_OFFSET = 40
+_CHECKSUM_ALL_ONES = 0xFFFFFFFF
+
+__all__ = [
+    "HiveHeader",
+    "RegistryHelper",
+    "RegistryNode",
+    "commands_below",
+    "hive_key",
+    "read_hive_header",
+    "registry_value_to_str",
+    "stores_commands_in_sections",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class HiveHeader:
+    """Integrity fields of a REGF base block."""
+
+    primary_sequence: int = 0
+    secondary_sequence: int = 0
+    hive_bins_size: int = 0
+    stored_checksum: int = 0
+    computed_checksum: int = 0
+
+    @property
+    def dirty(self) -> bool:
+        """Report whether the hive holds transactions its logs have not applied."""
+        return self.primary_sequence != self.secondary_sequence
+
+    @property
+    def checksum_valid(self) -> bool:
+        """Report whether the base block checksum matches the block's contents."""
+        return self.stored_checksum == self.computed_checksum
+
+
+def _base_block_checksum(block: bytes) -> int:
+    """Return the XOR-32 checksum a REGF base block stores at offset 0x1FC."""
+    checksum = 0
+    for offset in range(0, _CHECKSUM_OFFSET, 4):
+        checksum ^= struct.unpack_from("<I", block, offset)[0]
+    if checksum == 0:
+        return 1
+    if checksum == _CHECKSUM_ALL_ONES:
+        return 0xFFFFFFFE
+    return checksum
+
+
+def hive_key(path: Path) -> str:
+    """Return the identity under which a hive's open attempt is recorded."""
+    # RegistryHelper records attempts under this key and AnalysisContext looks
+    # them up by it, so both must derive it identically. Recorded one way and
+    # looked up another, a hive is reported as never read while its findings
+    # appear in the same report.
+    try:
+        return str(path.resolve())
+    except OSError:
+        logger.debug("Cannot resolve hive path: %s", path, exc_info=True)
+        return str(path)
+
+
+def read_hive_header(path: Path) -> HiveHeader | None:
+    """Parse a REGF base block, returning None when the file is not a hive."""
+    try:
+        with _io_path(path).open("rb") as hive_file:
+            block = hive_file.read(_HEADER_SIZE)
+    except OSError:
+        logger.debug("Cannot read hive header: %s", path, exc_info=True)
+        return None
+    if len(block) < _HEADER_SIZE or not block.startswith(_REGF_SIGNATURE):
+        return None
+    primary, secondary = struct.unpack_from("<II", block, _SEQUENCE_OFFSET)
+    return HiveHeader(
+        primary_sequence=primary,
+        secondary_sequence=secondary,
+        hive_bins_size=struct.unpack_from("<I", block, _BINS_SIZE_OFFSET)[0],
+        stored_checksum=struct.unpack_from("<I", block, _CHECKSUM_OFFSET)[0],
+        computed_checksum=_base_block_checksum(block),
+    )
+
+
+def _last_intact_bin_end(data: bytes | bytearray) -> int:
+    """Return the offset just past the last hive bin that is wholly present."""
+    offset = _BASE_BLOCK_SIZE
+    size = len(data)
+    while offset + 12 <= size:
+        if data[offset : offset + 4] != _HIVE_BIN_SIGNATURE:
+            break
+        bin_size = struct.unpack_from("<I", data, offset + 8)[0]
+        if bin_size == 0 or bin_size % _BASE_BLOCK_SIZE or offset + bin_size > size:
+            break
+        offset += bin_size
+    return offset
+
+
+def _clamp_bin_list(data: bytearray) -> bool:
+    """Rewrite a base block so its declared bin extent matches the bins present."""
+    # libregf rejects the whole file rather than the damaged tail, so clamping
+    # the extent to the last intact bin recovers everything before the damage.
+    end = _last_intact_bin_end(data)
+    if end <= _BASE_BLOCK_SIZE:
+        return False
+    struct.pack_into("<I", data, _BINS_SIZE_OFFSET, end - _BASE_BLOCK_SIZE)
+    primary = struct.unpack_from("<I", data, _SEQUENCE_OFFSET)[0]
+    struct.pack_into("<I", data, _SECONDARY_SEQUENCE_OFFSET, primary)
+    struct.pack_into(
+        "<I", data, _CHECKSUM_OFFSET, _base_block_checksum(bytes(data[:_HEADER_SIZE]))
+    )
+    return True
+
+
+def registry_key_join(*parts: str) -> str:
+    """Join registry key segments, skipping empty ones."""
+    # A hive whose root is already the key of interest contributes an empty one.
+    return "\\".join(part for part in parts if part)
+
+
+def registry_value_to_str(raw_value: object) -> str | None:
+    """Convert a registry value to a stripped string; return None if blank."""
+    if raw_value is None:
+        return None
+    stripped_text = str(raw_value).strip()
+    return stripped_text if stripped_text else None
 
 
 def _pyregf_extract_data(pyregf_value: Any) -> object:  # noqa: ANN401
@@ -46,20 +182,13 @@ def _pyregf_extract_data(pyregf_value: Any) -> object:  # noqa: ANN401
             return list(pyregf_value.get_data_as_multi_string())
     except Exception:
         logger.debug(
-            "Failed to extract typed data for value type %s",
+            "Registry value declares type %s but its data does not fit it; "
+            "reading the raw bytes instead",
             value_type,
             exc_info=True,
         )
     data = pyregf_value.get_data()
     return data if data is not None else b""
-
-
-def registry_value_to_str(raw_value: object) -> str | None:
-    """Convert a registry value to a stripped string; return None if blank."""
-    if raw_value is None:
-        return None
-    stripped_text = str(raw_value).strip()
-    return stripped_text if stripped_text else None
 
 
 class RegistryNode:
@@ -99,28 +228,240 @@ class RegistryNode:
         yield from self._values.values()
 
 
+def stores_commands_in_sections(key_path: str) -> bool:
+    """Report whether a key keeps its commands in ordered section subkeys."""
+    return key_path.rsplit("\\", 1)[-1].lower() in _SECTION_KEY_NAMES
+
+
+def _is_unnamed_default(value_name: str) -> bool:
+    """Report whether a value is the unnamed default, which holds only a caption."""
+    return not value_name or value_name == "(Default)"
+
+
+def commands_below(
+    node: RegistryNode | None, canonical_path: str
+) -> Iterator[tuple[str, str]]:
+    """Yield the canonical path and command of every named value below a key."""
+    if node is None:
+        return
+    for child_name, child_node in node.children():
+        child_path = f"{canonical_path}\\{child_name}"
+        for value_name, raw_value in child_node.values():
+            if _is_unnamed_default(value_name):
+                continue
+            command = registry_value_to_str(raw_value)
+            if command is None:
+                continue
+            yield f"{child_path}\\{value_name}", command
+        yield from commands_below(child_node, child_path)
+
+
+# Integrity channel: keys read only in part, so a report can distinguish "found
+# nothing here" from "could not look here". Reset per scan by
+# reset_partial_reads().
+_partial_reads: dict[str, str] = {}
+
+
+def reset_partial_reads() -> None:
+    """Forget the partial registry reads recorded by an earlier scan."""
+    _partial_reads.clear()
+
+
+def partial_reads() -> dict[str, str]:
+    """Return the registry keys that could only be read in part, mapped to why."""
+    return dict(_partial_reads)
+
+
+def _record_partial_read(key_name: object, exc: Exception) -> None:
+    """Note that a key lost values or subkeys, so the gap is reportable."""
+    name = str(key_name) if key_name else "<unnamed key>"
+    if name in _partial_reads:
+        return
+    _partial_reads[name] = _describe_failure(exc)
+    logger.warning("Registry key %s could only be read in part: %s", name, exc)
+    logger.debug("Registry read error details:", exc_info=True)
+
+
+# The same integrity channel for artifacts a check found but could not parse.
+# Reset by reset_artifact_failures().
+_artifact_failures: dict[str, CheckFailure] = {}
+
+
+def reset_artifact_failures() -> None:
+    """Forget the artifact read failures recorded by an earlier scan."""
+    _artifact_failures.clear()
+
+
+def artifact_failures() -> tuple[CheckFailure, ...]:
+    """Return the artifacts a check found but could not parse, as coverage it lost."""
+    return tuple(
+        _artifact_failures[identity] for identity in sorted(_artifact_failures)
+    )
+
+
+def _describe_failure(reason: BaseException | str) -> str:
+    """Render a parse failure as the single line a report can carry."""
+    if isinstance(reason, BaseException):
+        return f"{type(reason).__name__}: {reason}"
+    return str(reason)
+
+
+def record_artifact_failure(
+    check_id: str, artifact: Path | str, reason: BaseException | str
+) -> None:
+    """Note an artifact that exists but would not parse, so its silence is reported."""
+    # An artifact the image never held is a real negative, not coverage the scan lost.
+    if isinstance(reason, OSError) and reason.errno in (errno.ENOENT, errno.ENOTDIR):
+        return
+    identity = f"{check_id} artifact {artifact}"
+    if identity in _artifact_failures:
+        return
+    error = _describe_failure(reason)
+    _artifact_failures[identity] = CheckFailure(check_id=identity, error=error)
+    logger.warning("Check %s could not read artifact %s: %s", check_id, artifact, error)
+
+
+def _count_or_zero(key: KeyProtocol, counter: str, name: str) -> int:
+    """Return a pyregf child or value count, treating an unreadable count as empty."""
+    try:
+        return int(getattr(key, counter)())
+    except Exception as exc:
+        _record_partial_read(name, exc)
+        return 0
+
+
+def _value_at(
+    key: KeyProtocol, index: int, name: str
+) -> tuple[str, tuple[str, object]] | None:
+    """Read one value cell, reporting None when libregf cannot follow it."""
+    try:
+        registry_value = key.get_value(index)
+        value_name: str = registry_value.get_name() or ""
+        return value_name.lower(), (value_name, _pyregf_extract_data(registry_value))
+    except Exception as exc:
+        _record_partial_read(name, exc)
+        return None
+
+
+def _child_at(
+    key: KeyProtocol, index: int, name: str, depth: int
+) -> tuple[str, RegistryNode] | None:
+    """Read one subkey and its dict key, or None when libregf cannot follow it."""
+    try:
+        child = _materialize(key.get_sub_key(index), depth + 1)
+        return child.name.lower(), child
+    except Exception as exc:
+        _record_partial_read(name, exc)
+        return None
+
+
+def _materialize(key: KeyProtocol, depth: int = 0) -> RegistryNode:
+    """Convert a pyregf key and its children into a RegistryNode tree."""
+    # A cell libregf cannot follow costs only its own value or subkey. Letting
+    # it escape would unwind the whole check and report a damaged hive as clean.
+    try:
+        name: str = key.get_name() or ""
+    except Exception as exc:
+        _record_partial_read(None, exc)
+        name = ""
+
+    values: dict[str, tuple[str, object]] = {}
+    for value_index in range(_count_or_zero(key, "get_number_of_values", name)):
+        value_entry = _value_at(key, value_index, name)
+        if value_entry is not None:
+            values[value_entry[0]] = value_entry[1]
+
+    children: dict[str, RegistryNode] = {}
+    if depth < _MAX_REGISTRY_DEPTH:
+        for child_index in range(_count_or_zero(key, "get_number_of_sub_keys", name)):
+            child_entry = _child_at(key, child_index, name, depth)
+            if child_entry is not None:
+                children[child_entry[0]] = child_entry[1]
+    elif _count_or_zero(key, "get_number_of_sub_keys", name):
+        _record_partial_read(
+            name, RecursionError(f"registry depth limit {_MAX_REGISTRY_DEPTH} reached")
+        )
+
+    return RegistryNode(name, values, children)
+
+
 class RegistryHelper:
     """Offline registry hive parser built on pyregf with caching."""
 
     def __init__(self) -> None:
         self._hive_cache: dict[str, HiveProtocol | None] = {}
         self._subtree_cache: dict[tuple[int, str], RegistryNode | None] = {}
+        self._attempts: dict[str, HiveRecord] = {}
+
+    def open_attempts(self) -> dict[str, HiveRecord]:
+        """Return what happened to every hive this helper was asked to open."""
+        # A method, not an attribute: the test suite specs this class with
+        # create_autospec, which supplies methods but not instance attributes.
+        return dict(self._attempts)
 
     def open_hive(self, path: Path) -> HiveProtocol | None:
         """Open a registry hive file, caching by resolved path."""
-        key = str(path.resolve())
+        key = self._cache_key(path)
         if key in self._hive_cache:
             return self._hive_cache[key]
+
+        header = read_hive_header(path)
+        hive, status, error = self._load(path, header)
+        self._hive_cache[key] = hive
+        self._attempts[key] = HiveRecord(
+            path=str(path),
+            status=status,
+            dirty=header is not None and header.dirty,
+            error=error,
+        )
+        return hive
+
+    @staticmethod
+    def _cache_key(path: Path) -> str:
+        """Return the cache key for a hive, which is also its inventory identity."""
+        return hive_key(path)
+
+    def _load(
+        self, path: Path, header: HiveHeader | None
+    ) -> tuple[HiveProtocol | None, HiveStatus, str]:
+        """Open a hive, repairing an inconsistent bin list before giving up."""
         try:
             reg_file = pyregf.file()
-            reg_file.open(str(path))
-            hive: HiveProtocol | None = reg_file
+            reg_file.open(str(_io_path(path)))
+        except Exception as exc:
+            error = _describe_failure(exc)
+        else:
+            return reg_file, HiveStatus.OPENED, ""
+
+        logger.warning("Failed to open hive %s (%s)", path, error)
+        logger.debug("Hive open error details:", exc_info=True)
+        if header is None:
+            return None, HiveStatus.OPEN_FAILED, error
+
+        repaired = self._reopen_repaired(path)
+        if repaired is None:
+            return None, HiveStatus.OPEN_FAILED, error
+        logger.warning("Recovered hive %s by clamping its hive bin list", path)
+        return repaired, HiveStatus.REPAIRED, error
+
+    @staticmethod
+    def _reopen_repaired(path: Path) -> HiveProtocol | None:
+        """Reopen a hive from a corrected copy held only in memory."""
+        try:
+            data = bytearray(_io_path(path).read_bytes())
+        except OSError:
+            logger.debug("Cannot read hive for repair: %s", path, exc_info=True)
+            return None
+        if not _clamp_bin_list(data):
+            return None
+        try:
+            reg_file = pyregf.file()
+            reg_file.open_file_object(io.BytesIO(data))
         except Exception:
-            logger.warning("Failed to open hive: %s", path)
-            logger.debug("Hive open error details:", exc_info=True)
-            hive = None
-        self._hive_cache[key] = hive
-        return hive
+            logger.debug("Hive repair did not take for %s", path, exc_info=True)
+            return None
+        repaired: HiveProtocol = reg_file
+        return repaired
 
     @staticmethod
     def _normalize_key_path(key_path: str) -> str:
@@ -139,297 +480,22 @@ class RegistryHelper:
             self._subtree_cache[cache_key] = None
             return None
 
-        node = _materialize(pyregf_key)
+        try:
+            node = _materialize(pyregf_key)
+        except Exception as exc:
+            _record_partial_read(key_path, exc)
+            self._subtree_cache[cache_key] = None
+            return None
         self._subtree_cache[cache_key] = node
         return node
 
     @staticmethod
     def _resolve_key(hive: HiveProtocol, key_path: str) -> KeyProtocol | None:
-        """Resolve a key path to a pyregf key object, or None."""
+        """Resolve a key path to a pyregf key, or None when it cannot be followed."""
         try:
             norm = RegistryHelper._normalize_key_path(key_path)
             return hive.get_key_by_path(norm)
-        except Exception:
+        except Exception as exc:
             logger.debug("Could not resolve key %s", key_path, exc_info=True)
+            _record_partial_read(key_path, exc)
             return None
-
-
-def _materialize(key: KeyProtocol) -> RegistryNode:
-    """Recursively convert a pyregf key and its children into a RegistryNode tree."""
-    name: str = key.get_name()
-
-    values: dict[str, tuple[str, object]] = {}
-    for i in range(key.get_number_of_values()):
-        registry_value = key.get_value(i)
-        value_name: str = registry_value.get_name() or ""
-        values[value_name.lower()] = (
-            value_name,
-            _pyregf_extract_data(registry_value),
-        )
-
-    children: dict[str, RegistryNode] = {}
-    for i in range(key.get_number_of_sub_keys()):
-        sub_key = key.get_sub_key(i)
-        child_node = _materialize(sub_key)
-        children[child_node.name.lower()] = child_node
-
-    return RegistryNode(name, values, children)
-
-
-class HiveOps:
-    """High-level registry operations that wrap an AnalysisContext.
-
-    Provides convenience methods for common registry access patterns
-    used by persistence detection plugins.
-    """
-
-    def __init__(self, context: AnalysisContext) -> None:
-        self._context = context
-        self._registry: RegistryHelper = context.registry
-
-    def open_hive(self, hive_name: str) -> HiveProtocol | None:
-        """Resolve and open a registry hive by name. Returns None on failure."""
-        hive_path = self._context.hive_path(hive_name)
-        if hive_path is None:
-            return None
-        return self._registry.open_hive(hive_path)
-
-    def load_subtree(self, hive_name: str, key_path: str) -> RegistryNode | None:
-        """Open a hive and return a RegistryNode for the given key path."""
-        hive = self.open_hive(hive_name)
-        if hive is None:
-            return None
-        return self._registry.load_subtree(hive, key_path)
-
-    def iter_user_hives(self) -> Iterator[tuple[UserProfile, HiveProtocol]]:
-        """Iterate over user profiles, yielding each with its opened NTUSER hive."""
-        for user_profile in self._context.user_profiles:
-            if user_profile.ntuser_path is None:
-                continue
-            hive = self._registry.open_hive(user_profile.ntuser_path)
-            if hive is not None:
-                yield user_profile, hive
-
-    def iter_usrclass_hives(self) -> Iterator[tuple[UserProfile, HiveProtocol]]:
-        """Iterate user profiles, yielding each with its opened UsrClass.dat hive."""
-        for user_profile in self._context.user_profiles:
-            usrclass_path = self._context.hive_path(
-                "UsrClass.dat", user_profile.username
-            )
-            if usrclass_path is None:
-                continue
-            hive = self._registry.open_hive(usrclass_path)
-            if hive is not None:
-                yield user_profile, hive
-
-    def resolve_clsid_default(self, hive: HiveProtocol, subpath: str) -> str:
-        """Return the (Default) value at a registry subpath, or empty string."""
-        node = self._registry.load_subtree(hive, subpath)
-        if node is None:
-            return ""
-        default_value = node.get("(Default)")
-        return str(default_value) if default_value else ""
-
-    def resolve_clsid_inproc(self, hive: HiveProtocol, clsid: str) -> str:
-        """Look up a CLSID's InprocServer32 DLL path, or return empty string."""
-        if not clsid.startswith("{"):
-            return ""
-        return self.resolve_clsid_default(
-            hive, f"Classes\\CLSID\\{clsid}\\InprocServer32"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Declarative check engine (absorbed from plugins/engine.py)
-# ---------------------------------------------------------------------------
-
-
-def execute_definition(
-    definition: CheckDefinition,
-    registry: RegistryHelper,
-    hive_path_fn: Callable[..., Path | None],
-    active_controlset: str,
-    user_profiles: list[UserProfile],
-    make_finding: Callable[..., Finding],
-) -> list[Finding]:
-    """Walk all declared targets and emit findings.
-
-    This is the main entry point for the declarative check engine.
-
-    Parameters
-    ----------
-    definition:
-        The check definition whose targets will be iterated.
-    registry:
-        Registry helper for opening hives and loading subtrees.
-    hive_path_fn:
-        Callable that resolves a hive name to a filesystem Path (or None).
-        Typically ``context.hive_path``.
-    active_controlset:
-        The active ControlSet name (e.g. ``"ControlSet001"``).
-    user_profiles:
-        List of user profiles to iterate for HKU-scoped targets.
-    make_finding:
-        Callable that creates a Finding from path, value, and access level.
-        Typically ``plugin._make_finding``.
-    """
-    findings: list[Finding] = []
-    for target in definition.targets:
-        for hive, key_path, canonical_prefix in _iter_hive_contexts(
-            target, registry, hive_path_fn, active_controlset, user_profiles
-        ):
-            if target.recurse:
-                _collect_findings_from_children(
-                    registry,
-                    hive,
-                    key_path,
-                    canonical_prefix,
-                    target.values,
-                    findings,
-                    make_finding,
-                )
-            else:
-                _collect_findings_from_node(
-                    registry,
-                    hive,
-                    key_path,
-                    canonical_prefix,
-                    target.values,
-                    findings,
-                    make_finding,
-                )
-    return findings
-
-
-def _iter_hive_contexts(
-    target: RegistryTarget,
-    registry: RegistryHelper,
-    hive_path_fn: Callable[..., Path | None],
-    active_controlset: str,
-    user_profiles: list[UserProfile],
-) -> Iterator[tuple[HiveProtocol, str, str]]:
-    """Yield (hive_object, key_path, canonical_prefix) for each applicable hive."""
-    scope = target.scope
-
-    if scope in (HiveScope.HKLM, HiveScope.BOTH):
-        normalized = (
-            normalize_windows_path(target.path).strip("\\") if target.path else ""
-        )
-        parts = normalized.split("\\", 1) if normalized else [""]
-        hive_name = parts[0] if parts else ""
-        key_path = parts[1] if len(parts) > 1 else ""
-
-        if "{controlset}" in key_path:
-            key_path = key_path.replace("{controlset}", active_controlset)
-
-        hive_path = hive_path_fn(hive_name)
-        if hive_path is not None:
-            hive = registry.open_hive(hive_path)
-            if hive is not None:
-                yield hive, key_path, f"HKLM\\{hive_name}"
-
-    if scope in (HiveScope.HKU, HiveScope.BOTH):
-        for user_profile in user_profiles:
-            if user_profile.ntuser_path is None:
-                continue
-            hive = registry.open_hive(user_profile.ntuser_path)
-            if hive is None:
-                continue
-            yield hive, target.path, f"HKU\\{user_profile.username}"
-
-
-def _collect_findings_from_node(
-    registry: RegistryHelper,
-    hive: HiveProtocol,
-    key_path: str,
-    canonical_prefix: str,
-    values_selector: str,
-    findings: list[Finding],
-    make_finding: Callable[..., Finding],
-) -> None:
-    """Read registry values from a node and append findings."""
-    for name, raw_value in _read_values(registry, hive, key_path, values_selector):
-        for value_string in _flatten_registry_value(raw_value):
-            registry_path = _build_registry_path(canonical_prefix, key_path, name)
-            access_level = (
-                AccessLevel.SYSTEM
-                if canonical_prefix.startswith("HKLM")
-                else AccessLevel.USER
-            )
-            findings.append(
-                make_finding(
-                    path=registry_path,
-                    value=value_string,
-                    access=access_level,
-                )
-            )
-
-
-def _collect_findings_from_children(
-    registry: RegistryHelper,
-    hive: HiveProtocol,
-    key_path: str,
-    canonical_prefix: str,
-    value_name: str,
-    findings: list[Finding],
-    make_finding: Callable[..., Finding],
-) -> None:
-    """Iterate child subkeys and read a named value from each."""
-    tree = registry.load_subtree(hive, key_path)
-    if tree is None:
-        return
-    access = (
-        AccessLevel.SYSTEM if canonical_prefix.startswith("HKLM") else AccessLevel.USER
-    )
-    for child_name, child_node in tree.children():
-        value_str = registry_value_to_str(child_node.get(value_name))
-        if value_str is None:
-            continue
-        registry_path = f"{canonical_prefix}\\{key_path}\\{child_name}\\{value_name}"
-        findings.append(
-            make_finding(path=registry_path, value=value_str, access=access)
-        )
-
-
-def _read_values(
-    registry: RegistryHelper,
-    hive: HiveProtocol,
-    key_path: str,
-    values_selector: str,
-) -> Iterator[tuple[str, object]]:
-    """Yield (name, value) pairs from the registry node at key_path."""
-    node = registry.load_subtree(hive, key_path)
-    if node is None:
-        return
-    if values_selector == "*":
-        yield from node.values()
-    else:
-        registry_value = node.get(values_selector)
-        if registry_value is not None:
-            yield values_selector, registry_value
-
-
-def _flatten_registry_value(raw_value: object) -> list[str]:
-    """Convert a raw registry value to a list of non-blank strings.
-
-    REG_MULTI_SZ values arrive as lists; each non-blank element
-    becomes its own entry. Other types become a single-element list.
-    """
-    if isinstance(raw_value, list):
-        return [
-            str(element)
-            for element in raw_value
-            if element is not None and str(element).strip().strip('"')
-        ]
-    text = str(raw_value) if raw_value is not None else ""
-    if not text.strip():
-        return []
-    return [text]
-
-
-def _build_registry_path(canonical_prefix: str, key_path: str, value_name: str) -> str:
-    """Construct a human-readable registry path."""
-    registry_path = f"{canonical_prefix}\\{key_path}" if key_path else canonical_prefix
-    if value_name and value_name != "(Default)":
-        registry_path = f"{registry_path}\\{value_name}"
-    return registry_path

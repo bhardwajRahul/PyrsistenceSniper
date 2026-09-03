@@ -1,3 +1,5 @@
+"""Detection for AppInit DLLs."""
+
 from __future__ import annotations
 
 import re
@@ -20,6 +22,8 @@ _SPLIT_RE = re.compile(r"[,\s]+")
 
 @register_plugin
 class AppInitDlls(PersistencePlugin):
+    """Detects AppInit DLLs persistence entries."""
+
     definition = CheckDefinition(
         id="appinit_dlls",
         technique="AppInit DLLs",
@@ -35,9 +39,10 @@ class AppInitDlls(PersistencePlugin):
     )
 
     def run(self) -> list[Finding]:
+        """Report each DLL named in AppInit_DLLs, in both registry views."""
         findings: list[Finding] = []
 
-        hive = self.hive_ops.open_hive("SOFTWARE")
+        hive = self.context.open_hive_by_name("SOFTWARE")
         if hive is None:
             return findings
 
@@ -72,8 +77,8 @@ class AppInitDlls(PersistencePlugin):
         return findings
 
     @staticmethod
-    def _read_context(node: object) -> str:
-        assert isinstance(node, RegistryNode)
+    def _read_context(node: RegistryNode) -> str:
+        """Summarise the switches that decide whether the DLL list is loaded."""
         parts: list[str] = []
         load = node.get("LoadAppInit_DLLs")
         if isinstance(load, int):

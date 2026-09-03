@@ -1,124 +1,87 @@
-from __future__ import annotations
+"""Detection for Accessibility Features."""
 
-from pathlib import PureWindowsPath
+from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
     Finding,
 )
+from pyrsistencesniper.core.registry import RegistryNode, registry_value_to_str
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
 _AT_KEY = r"Microsoft\Windows NT\CurrentVersion\Accessibility\ATs"
 _AT_KEY_WOW64 = r"Wow6432Node\Microsoft\Windows NT\CurrentVersion\Accessibility\ATs"
-_CONFIG_KEY = (
-    r"Software\Microsoft\Windows NT\CurrentVersion\Accessibility\Configuration"
-)
-
-_KNOWN_AT_EXES: frozenset[str] = frozenset(
-    {
-        "eoaexperiences.exe",
-        "livecaptions.exe",
-        "magnify.exe",
-        "narrator.exe",
-        "osk.exe",
-        "sapisvr.exe",
-        "voiceaccess.exe",
-    }
-)
-
-_KNOWN_AT_NAMES: frozenset[str] = frozenset(
-    {
-        "cursorindicator",
-        "livecaptions",
-        "magnifierpane",
-        "narrator",
-        "osk",
-        "speechreco",
-        "voiceaccess",
-    }
-)
+_CONFIG_KEY = r"Software\Microsoft\Windows NT\CurrentVersion\Accessibility"
+_CONFIG_VALUE = "Configuration"
+_DEFAULT_HIVE = "DEFAULT"
+_DEFAULT_USERNAME = ".DEFAULT"
 
 
 @register_plugin
 class AssistiveTechnology(PersistencePlugin):
+    """Detects Accessibility Features persistence entries."""
+
     definition = CheckDefinition(
         id="assistive_technology",
         technique="Accessibility Features",
         mitre_id="T1546.008",
         description=(
-            "Assistive Technology (AT) applications registered in the "
-            "Accessibility\\ATs key may be launched when accessibility features "
-            "are enabled. The per-user Configuration key lists ATs that Windows "
-            "auto-launches at logon. Registering a malicious AT or adding its "
-            "name to the Configuration list provides persistence triggered by "
-            "accessibility shortcuts or user logon."
+            "Assistive Technology (AT) applications registered under the "
+            "Accessibility ATs key may be launched when accessibility features "
+            "are enabled. The Configuration value lists the ATs Windows "
+            "auto-launches: per user at logon, and in the DEFAULT hive on the "
+            "sign-in desktop before any user authenticates. Registering a "
+            "malicious AT or adding its name to a Configuration list provides "
+            "persistence triggered by accessibility shortcuts, user logon, or "
+            "the lock screen."
         ),
         references=(
             "https://attack.mitre.org/techniques/T1546/008/",
             "https://www.hexacorn.com/blog/2016/07/22/beyond-good-ol-run-key-part-42/",
         ),
-        allow=(
-            FilterRule(
-                reason="Default Windows accessibility tool",
-                value_matches=(
-                    r"(?i)(EoAExperiences|LiveCaptions|Magnify|Narrator"
-                    r"|osk|sapisvr|VoiceAccess)\.exe"
-                ),
-                signer="Microsoft",
-                not_lolbin=True,
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
+        """Report registered ATs and every Configuration list that auto-starts one."""
         findings: list[Finding] = []
         findings.extend(
-            self._scan_at_registrations("SOFTWARE", _AT_KEY, "HKLM\\SOFTWARE")
+            self._scan_at_registrations("SOFTWARE", _AT_KEY, r"HKLM\SOFTWARE")
         )
         findings.extend(
-            self._scan_at_registrations("SOFTWARE", _AT_KEY_WOW64, "HKLM\\SOFTWARE")
+            self._scan_at_registrations("SOFTWARE", _AT_KEY_WOW64, r"HKLM\SOFTWARE")
         )
         findings.extend(self._scan_user_configuration())
+        findings.extend(self._scan_signin_configuration())
         return findings
 
     def _scan_at_registrations(
         self, hive_name: str, at_key: str, canonical_prefix: str
     ) -> list[Finding]:
+        """Report every AT registered with a launchable StartExe under an ATs key."""
         findings: list[Finding] = []
 
-        tree = self.hive_ops.load_subtree(hive_name, at_key)
+        tree = self.context.load_subtree(hive_name, at_key)
         if tree is None:
             return findings
 
         for at_name, node in tree.children():
-            val = node.get("StartExe")
-            if val is None:
+            start_exe = node.get("StartExe")
+            if start_exe is None or isinstance(start_exe, int):
                 continue
 
-            if isinstance(val, int):
-                continue
-
-            value_str = val if isinstance(val, str) else str(val)
-            value_str = value_str.strip()
-
+            value_str = str(start_exe).strip()
             if not value_str or value_str.isdigit():
                 continue
 
             params = node.get("StartParams")
-            if params is not None and isinstance(params, str) and params.strip():
+            if isinstance(params, str) and params.strip():
                 value_str = f"{value_str} {params.strip()}"
-
-            if not self._include_defaults:
-                exe_name = PureWindowsPath(value_str.split()[0]).name.lower()
-                if exe_name in _KNOWN_AT_EXES:
-                    continue
 
             findings.append(
                 self._make_finding(
-                    path=f"{canonical_prefix}\\{at_key}\\{at_name}\\StartExe",
+                    path=rf"{canonical_prefix}\{at_key}\{at_name}\StartExe",
                     value=value_str,
                     access=AccessLevel.SYSTEM,
                 )
@@ -127,32 +90,45 @@ class AssistiveTechnology(PersistencePlugin):
         return findings
 
     def _scan_user_configuration(self) -> list[Finding]:
+        """Report the ATs each user profile auto-starts at logon."""
         findings: list[Finding] = []
 
-        for profile, hive in self.hive_ops.iter_user_hives():
+        for profile, hive in self.context.iter_user_hives():
             node = self.registry.load_subtree(hive, _CONFIG_KEY)
-            config_val = node.get("Configuration") if node else None
-            if config_val is None:
+            findings.extend(
+                self._configuration_findings(node, profile.username, AccessLevel.USER)
+            )
+
+        return findings
+
+    def _scan_signin_configuration(self) -> list[Finding]:
+        """Report the ATs the sign-in desktop auto-starts out of the DEFAULT hive."""
+        # This list runs on the Winlogon desktop before anyone authenticates, so
+        # an AT named here executes as SYSTEM without a logon of any kind.
+        node = self.context.load_subtree(_DEFAULT_HIVE, _CONFIG_KEY)
+        return self._configuration_findings(node, _DEFAULT_USERNAME, AccessLevel.SYSTEM)
+
+    def _configuration_findings(
+        self, node: RegistryNode | None, username: str, access: AccessLevel
+    ) -> list[Finding]:
+        """Split one Accessibility Configuration list into a finding per AT name."""
+        findings: list[Finding] = []
+
+        value_str = registry_value_to_str(node.get(_CONFIG_VALUE)) if node else None
+        if value_str is None:
+            return findings
+
+        for raw_at_name in value_str.split(","):
+            at_name = raw_at_name.strip()
+            if not at_name:
                 continue
 
-            value_str = str(config_val).strip()
-            if not value_str:
-                continue
-
-            for raw_at_name in value_str.split(","):
-                at_name = raw_at_name.strip()
-                if not at_name:
-                    continue
-
-                if not self._include_defaults and at_name.lower() in _KNOWN_AT_NAMES:
-                    continue
-
-                findings.append(
-                    self._make_finding(
-                        path=f"HKU\\{profile.username}\\{_CONFIG_KEY}\\Configuration",
-                        value=at_name,
-                        access=AccessLevel.USER,
-                    )
+            findings.append(
+                self._make_finding(
+                    path=rf"HKU\{username}\{_CONFIG_KEY}\{_CONFIG_VALUE}",
+                    value=at_name,
+                    access=access,
                 )
+            )
 
         return findings

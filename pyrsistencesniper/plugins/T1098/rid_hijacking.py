@@ -1,39 +1,30 @@
-"""Detect RID hijacking and RID suborner persistence in the SAM hive (T1098).
-
-RID Hijacking modifies the binary F value in the SAM hive to change a
-user account's effective RID.  A mismatch between the registry subkey
-RID and the F-value RID (typically changed to 500/Administrator) grants
-admin privileges to a low-privilege account.  The Suborner variant
-specifically detects hidden accounts whose F-value RID has been set to
-500.
-"""
+"""Detect RID hijacking and RID suborner persistence in the SAM hive (T1098)."""
 
 from __future__ import annotations
 
-import logging
 import struct
+from typing import TYPE_CHECKING
 
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
     Finding,
 )
-from pyrsistencesniper.core.registry import RegistryNode
+from pyrsistencesniper.core.sam import USERS_PATH, iter_user_rid_nodes
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
-_USERS_PATH = r"SAM\Domains\Account\Users"
+    from pyrsistencesniper.core.registry import RegistryNode
+
 _MIN_F_VALUE_LENGTH = 52
 _ADMIN_RID = 500
 
 
 def _parse_f_value_rid(f_value: bytes) -> int | None:
-    """Extract the RID from a SAM F-value at offset 0x30.
-
-    Returns None if the F-value is too short or unpacking fails.
-    """
+    """Return the RID a SAM F value carries at offset 0x30, or None when unreadable."""
     if len(f_value) < _MIN_F_VALUE_LENGTH:
         return None
     try:
@@ -43,21 +34,16 @@ def _parse_f_value_rid(f_value: bytes) -> int | None:
         return None
 
 
-def _iter_user_rid_nodes(
-    tree: RegistryNode,
-) -> list[tuple[str, int, RegistryNode]]:
-    """Yield (rid_hex, actual_rid, node) for each valid user subkey."""
-    results: list[tuple[str, int, RegistryNode]] = []
-    for rid_hex_name, child_node in tree.children():
-        if rid_hex_name == "Names":
+def _iter_account_rids(users_tree: RegistryNode) -> Iterator[tuple[str, int, int]]:
+    """Yield (subkey name, subkey RID, F value RID) for every readable user key."""
+    for rid_hex_name, subkey_rid, user_node in iter_user_rid_nodes(users_tree):
+        f_value = user_node.get("F")
+        if not isinstance(f_value, bytes):
             continue
-        try:
-            actual_rid = int(rid_hex_name, 16)
-        except ValueError:
-            logger.debug("Invalid RID hex value: %s", rid_hex_name, exc_info=True)
+        f_value_rid = _parse_f_value_rid(f_value)
+        if f_value_rid is None:
             continue
-        results.append((rid_hex_name, actual_rid, child_node))
-    return results
+        yield rid_hex_name, subkey_rid, f_value_rid
 
 
 @register_plugin
@@ -69,45 +55,32 @@ class RidHijacking(PersistencePlugin):
         technique="RID Hijacking",
         mitre_id="T1098",
         description=(
-            "RID Hijacking modifies the binary F value in the SAM hive to "
-            "change a user account's effective RID. A mismatch between the "
-            "registry subkey RID and the F-value RID (typically changed to "
-            "500/Administrator) grants admin privileges to a low-privilege "
-            "account."
+            "RID Hijacking rewrites the binary F value in the SAM hive to "
+            "change an account's effective RID. A subkey RID that disagrees "
+            "with the F value RID (usually set to 500, Administrator) grants "
+            "admin privileges to a low-privilege account."
         ),
         references=("https://attack.mitre.org/techniques/T1098/",),
     )
 
     def run(self) -> list[Finding]:
-        """Scan SAM user subkeys for RID mismatches."""
-        findings: list[Finding] = []
-
-        users_tree = self.hive_ops.load_subtree("SAM", _USERS_PATH)
+        """Report every account whose F value RID differs from its subkey RID."""
+        users_tree = self.context.load_subtree("SAM", USERS_PATH)
         if users_tree is None:
-            return findings
+            return []
 
-        for rid_hex_name, actual_rid, child_node in _iter_user_rid_nodes(users_tree):
-            f_value_raw = child_node.get("F")
-            if f_value_raw is None or not isinstance(f_value_raw, bytes):
-                continue
-
-            f_value_rid = _parse_f_value_rid(f_value_raw)
-            if f_value_rid is None:
-                continue
-
-            if f_value_rid != actual_rid:
-                findings.append(
-                    self._make_finding(
-                        path=f"HKLM\\{_USERS_PATH}\\{rid_hex_name}\\F",
-                        value=(
-                            f"RID mismatch: subkey=0x{actual_rid:X} "
-                            f"({actual_rid}), F value=0x{f_value_rid:X} ({f_value_rid})"
-                        ),
-                        access=AccessLevel.SYSTEM,
-                    )
-                )
-
-        return findings
+        return [
+            self._make_finding(
+                path=f"HKLM\\{USERS_PATH}\\{rid_hex_name}\\F",
+                value=(
+                    f"RID mismatch: subkey=0x{subkey_rid:X} "
+                    f"({subkey_rid}), F value=0x{f_value_rid:X} ({f_value_rid})"
+                ),
+                access=AccessLevel.SYSTEM,
+            )
+            for rid_hex_name, subkey_rid, f_value_rid in _iter_account_rids(users_tree)
+            if f_value_rid != subkey_rid
+        ]
 
 
 @register_plugin
@@ -119,41 +92,28 @@ class RidSuborner(PersistencePlugin):
         technique="RID Suborner (Hidden Admin Account)",
         mitre_id="T1098",
         description=(
-            "The Suborner technique creates a hidden account with RID 500 "
-            "by directly manipulating SAM hive entries, bypassing standard "
-            "account-creation APIs. Accounts whose F-value RID is 500 but "
-            "whose subkey RID differs are flagged."
+            "The Suborner technique writes SAM hive entries directly, "
+            "bypassing the account-creation APIs, to leave a hidden account "
+            "carrying RID 500. An account whose F value RID is 500 while its "
+            "subkey RID is not is reported."
         ),
         references=("https://attack.mitre.org/techniques/T1098/",),
     )
 
     def run(self) -> list[Finding]:
-        """Scan SAM user subkeys for hidden admin (RID 500) accounts."""
-        findings: list[Finding] = []
-
-        users_tree = self.hive_ops.load_subtree("SAM", _USERS_PATH)
+        """Report every non-Administrator account whose F value claims RID 500."""
+        users_tree = self.context.load_subtree("SAM", USERS_PATH)
         if users_tree is None:
-            return findings
+            return []
 
-        for rid_hex_name, actual_rid, child_node in _iter_user_rid_nodes(users_tree):
-            f_value_raw = child_node.get("F")
-            if f_value_raw is None or not isinstance(f_value_raw, bytes):
-                continue
-
-            f_value_rid = _parse_f_value_rid(f_value_raw)
-            if f_value_rid is None:
-                continue
-
-            if f_value_rid == _ADMIN_RID and actual_rid != _ADMIN_RID:
-                findings.append(
-                    self._make_finding(
-                        path=f"HKLM\\{_USERS_PATH}\\{rid_hex_name}\\F",
-                        value=(
-                            f"Potential Suborner: account 0x{actual_rid:X} "
-                            f"has F-value RID=500"
-                        ),
-                        access=AccessLevel.SYSTEM,
-                    )
-                )
-
-        return findings
+        return [
+            self._make_finding(
+                path=f"HKLM\\{USERS_PATH}\\{rid_hex_name}\\F",
+                value=(
+                    f"Potential Suborner: account 0x{subkey_rid:X} has F-value RID=500"
+                ),
+                access=AccessLevel.SYSTEM,
+            )
+            for rid_hex_name, subkey_rid, f_value_rid in _iter_account_rids(users_tree)
+            if f_value_rid == _ADMIN_RID and subkey_rid != _ADMIN_RID
+        ]

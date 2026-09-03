@@ -1,7 +1,4 @@
-"""Tests for the DotNetStartupHooks plugin (T1574.012).
-
-Detects DOTNET_STARTUP_HOOKS in SYSTEM environment and per-user HKU environment.
-"""
+"""Tests for the DotNetStartupHooks plugin (T1574.012)."""
 
 from __future__ import annotations
 
@@ -18,98 +15,95 @@ def _make_plugin(
     tmp_path: Path,
     user_profiles: list[UserProfile] | None = None,
 ) -> DotNetStartupHooks:
-    context, _registry, _fs, _profile = make_deps(tmp_path, user_profiles=user_profiles)
+    """Build a DotNetStartupHooks; without profiles it sees no user hives at all."""
+    context, _registry, _filesystem = make_deps(tmp_path, user_profiles=user_profiles)
     return DotNetStartupHooks(context=context)
 
 
-def test_system_hive_detected(tmp_path: Path) -> None:
-    """DOTNET_STARTUP_HOOKS in SYSTEM environment produces a SYSTEM finding."""
+def _plugin_reading(tmp_path: Path, environment_key: object) -> DotNetStartupHooks:
+    """Answer the machine Environment key with the node given, or None for absent."""
     plugin = _make_plugin(tmp_path)
-    node = make_node(values={"DOTNET_STARTUP_HOOKS": r"C:\evil.dll"})
-
     plugin.context.hive_path.return_value = Path("/fake/SYSTEM")
     plugin.registry.open_hive.return_value = MagicMock()
-    plugin.registry.load_subtree.return_value = node
+    plugin.registry.load_subtree.return_value = environment_key
+    return plugin
 
-    findings = plugin.run()
-    system_findings = [f for f in findings if f.access_gained == AccessLevel.SYSTEM]
+
+def _profile(tmp_path: Path, username: str) -> list[UserProfile]:
+    """Return one profile whose NTUSER.DAT the check will open."""
+    return [
+        UserProfile(username, tmp_path / "Users" / username, tmp_path / "NTUSER.DAT")
+    ]
+
+
+def test_system_hive_detected(tmp_path: Path) -> None:
+    """DOTNET_STARTUP_HOOKS in the machine environment loads into every CLR process."""
+    node = make_node(values={"DOTNET_STARTUP_HOOKS": r"C:\evil.dll"})
+
+    findings = _plugin_reading(tmp_path, node).run()
+
+    system_findings = [
+        finding for finding in findings if finding.access_gained == AccessLevel.SYSTEM
+    ]
     assert len(system_findings) == 1
     assert system_findings[0].value == r"C:\evil.dll"
     assert "DOTNET_STARTUP_HOOKS" in system_findings[0].path
 
 
 def test_system_hive_missing(tmp_path: Path) -> None:
-    """Missing SYSTEM hive produces no findings."""
+    """An image with no SYSTEM hive is a clean absence, not a scan failure."""
     plugin = _make_plugin(tmp_path)
     plugin.context.hive_path.return_value = None
 
-    findings = plugin.run()
-    assert findings == []
+    assert plugin.run() == []
 
 
 def test_system_env_key_missing(tmp_path: Path) -> None:
-    """SYSTEM hive exists but Environment key is absent."""
-    plugin = _make_plugin(tmp_path)
-    plugin.context.hive_path.return_value = Path("/fake/SYSTEM")
-    plugin.registry.open_hive.return_value = MagicMock()
-    plugin.registry.load_subtree.return_value = None
-
-    findings = plugin.run()
-    assert findings == []
+    """A SYSTEM hive without an Environment key sets no variable to report."""
+    assert _plugin_reading(tmp_path, None).run() == []
 
 
 def test_system_env_no_hooks_value(tmp_path: Path) -> None:
-    """Environment key exists but DOTNET_STARTUP_HOOKS is not set."""
-    plugin = _make_plugin(tmp_path)
+    """An Environment key holding other variables sets no startup hook."""
     node = make_node(values={"OTHER_VAR": "something"})
-    plugin.context.hive_path.return_value = Path("/fake/SYSTEM")
-    plugin.registry.open_hive.return_value = MagicMock()
-    plugin.registry.load_subtree.return_value = node
 
-    findings = plugin.run()
-    assert findings == []
+    assert _plugin_reading(tmp_path, node).run() == []
 
 
 def test_user_hive_detected(tmp_path: Path) -> None:
-    """DOTNET_STARTUP_HOOKS in a user hive produces a USER finding."""
-    profiles = [
-        UserProfile("victim", tmp_path / "Users" / "victim", tmp_path / "NTUSER.DAT"),
-    ]
-    plugin = _make_plugin(tmp_path, user_profiles=profiles)
-
-    system_hive = MagicMock()
-    user_hive = MagicMock()
+    """The HKCU copy needs no administrative rights, so it is checked too."""
+    plugin = _make_plugin(tmp_path, user_profiles=_profile(tmp_path, "victim"))
     plugin.context.hive_path.return_value = Path("/fake/SYSTEM")
-    plugin.registry.open_hive.side_effect = [system_hive, user_hive]
+    plugin.registry.open_hive.side_effect = [MagicMock(), MagicMock()]
     plugin.registry.load_subtree.side_effect = [
-        None,  # SYSTEM Environment — no hooks
+        None,
         make_node(values={"DOTNET_STARTUP_HOOKS": r"C:\user_evil.dll"}),
     ]
 
     findings = plugin.run()
-    user_findings = [f for f in findings if f.access_gained == AccessLevel.USER]
+
+    user_findings = [
+        finding for finding in findings if finding.access_gained == AccessLevel.USER
+    ]
     assert len(user_findings) == 1
     assert user_findings[0].value == r"C:\user_evil.dll"
     assert "victim" in user_findings[0].path
 
 
 def test_both_system_and_user(tmp_path: Path) -> None:
-    """Hooks in both SYSTEM and user hives produce findings for each."""
-    profiles = [
-        UserProfile("alice", tmp_path / "Users" / "alice", tmp_path / "NTUSER.DAT"),
-    ]
-    plugin = _make_plugin(tmp_path, user_profiles=profiles)
-
-    system_hive = MagicMock()
-    user_hive = MagicMock()
+    """A hook set in both scopes is two separate settings, so two findings."""
+    plugin = _make_plugin(tmp_path, user_profiles=_profile(tmp_path, "alice"))
     plugin.context.hive_path.return_value = Path("/fake/SYSTEM")
-    plugin.registry.open_hive.side_effect = [system_hive, user_hive]
+    plugin.registry.open_hive.side_effect = [MagicMock(), MagicMock()]
     plugin.registry.load_subtree.side_effect = [
         make_node(values={"DOTNET_STARTUP_HOOKS": r"C:\sys.dll"}),
         make_node(values={"DOTNET_STARTUP_HOOKS": r"C:\user.dll"}),
     ]
 
     findings = plugin.run()
+
     assert len(findings) == 2
-    access_levels = {f.access_gained for f in findings}
-    assert access_levels == {AccessLevel.SYSTEM, AccessLevel.USER}
+    assert {finding.access_gained for finding in findings} == {
+        AccessLevel.SYSTEM,
+        AccessLevel.USER,
+    }

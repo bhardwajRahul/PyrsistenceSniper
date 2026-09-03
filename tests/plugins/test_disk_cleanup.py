@@ -11,11 +11,20 @@ from pyrsistencesniper.plugins.T1546.disk_cleanup import DiskCleanupHandler
 from .conftest import make_node, make_plugin
 
 
+def _plugin_reading(tmp_path: Path, *answers: object) -> object:
+    """Answer the VolumeCaches read, then the CLSID read, with the nodes given."""
+    plugin = make_plugin(DiskCleanupHandler, tmp_path)
+    plugin.context.hive_path.return_value = Path("/fake/SOFTWARE")
+    plugin.registry.open_hive.return_value = MagicMock()
+    plugin.registry.load_subtree.side_effect = list(answers)
+    return plugin
+
+
 class TestDiskCleanupHandler:
     """DiskCleanupHandler enumerates VolumeCaches handlers and resolves CLSIDs."""
 
     def test_happy_path_handler_with_inproc(self, tmp_path: Path) -> None:
-        """Handler with CLSID and InprocServer32 DLL produces a finding."""
+        """A handler CLSID resolving to a DLL names the code cleanmgr.exe loads."""
         handler_node = make_node(name="OldFiles", values={"(Default)": "{CLSID-1}"})
         tree = make_node(children={"OldFiles": handler_node})
         inproc_node = make_node(
@@ -23,39 +32,27 @@ class TestDiskCleanupHandler:
             values={"(Default)": "C:\\evil.dll"},
         )
 
-        p = make_plugin(DiskCleanupHandler, tmp_path)
-        p.context.hive_path.return_value = Path("/fake/SOFTWARE")
-        hive = MagicMock()
-        p.registry.open_hive.return_value = hive
-        p.registry.load_subtree.side_effect = [tree, inproc_node]
+        findings = _plugin_reading(tmp_path, tree, inproc_node).run()
 
-        findings = p.run()
         assert len(findings) == 1
         assert "evil.dll" in findings[0].value
         assert findings[0].access_gained == AccessLevel.SYSTEM
 
     def test_handler_without_inproc_resolution(self, tmp_path: Path) -> None:
-        """Handler exists but InprocServer32 not found -- no finding."""
+        """A CLSID registering no server names no DLL, so there is nothing to report."""
         handler_node = make_node(name="Broken", values={"(Default)": "{CLSID-X}"})
         tree = make_node(children={"Broken": handler_node})
 
-        p = make_plugin(DiskCleanupHandler, tmp_path)
-        p.context.hive_path.return_value = Path("/fake/SOFTWARE")
-        hive = MagicMock()
-        p.registry.open_hive.return_value = hive
-        p.registry.load_subtree.side_effect = [tree, None]  # InprocServer32 not found
-
-        assert p.run() == []
+        assert _plugin_reading(tmp_path, tree, None).run() == []
 
     def test_handler_without_clsid(self, tmp_path: Path) -> None:
-        """Handler with non-CLSID (Default) value is skipped."""
+        """A (Default) that is not a CLSID registers no COM server to resolve."""
         handler_node = make_node(name="NoClsid", values={"(Default)": "not-a-clsid"})
         tree = make_node(children={"NoClsid": handler_node})
 
-        p = make_plugin(DiskCleanupHandler, tmp_path)
-        p.context.hive_path.return_value = Path("/fake/SOFTWARE")
-        hive = MagicMock()
-        p.registry.open_hive.return_value = hive
-        p.registry.load_subtree.return_value = tree
+        plugin = make_plugin(DiskCleanupHandler, tmp_path)
+        plugin.context.hive_path.return_value = Path("/fake/SOFTWARE")
+        plugin.registry.open_hive.return_value = MagicMock()
+        plugin.registry.load_subtree.return_value = tree
 
-        assert p.run() == []
+        assert plugin.run() == []

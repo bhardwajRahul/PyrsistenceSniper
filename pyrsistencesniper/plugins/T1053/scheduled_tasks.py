@@ -1,96 +1,63 @@
-"""Extract Exec actions from scheduled task XML files under System32\\Tasks."""
+"""Extract Exec and ComHandler actions from task XML files under System32\\Tasks."""
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path, PureWindowsPath
 
 import defusedxml.ElementTree as DefusedET
 
-from pyrsistencesniper.core.filesystem import safe_iterdir
+from pyrsistencesniper.core.filesystem import (
+    safe_is_dir,
+    safe_is_file,
+    safe_iterdir,
+)
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
+    EventLogTime,
+    FileWriteTime,
     Finding,
 )
+from pyrsistencesniper.core.registry import record_artifact_failure
+from pyrsistencesniper.core.windows import _io_path
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
-logger = logging.getLogger(__name__)
-
 _TASKS_DIR = r"Windows\System32\Tasks"
+_TASKS_RELATIVE = Path(*_TASKS_DIR.split("\\"))
 _MAX_DEPTH = 50
 
 
 @register_plugin
 class ScheduledTaskFiles(PersistencePlugin):
+    """Detects Scheduled Task (XML Files) persistence entries."""
+
     definition = CheckDefinition(
         id="scheduled_task_files",
         technique="Scheduled Task (XML Files)",
         mitre_id="T1053.005",
         description=(
             "Scheduled task XML files under System32\\Tasks define actions "
-            "executed on triggers. All Exec actions are extracted and "
-            "reported; non-OS executables and scripts are typical "
-            "indicators of persistence."
+            "executed on triggers. Exec actions are reported by command line "
+            "and ComHandler actions by the COM server their CLSID registers."
         ),
         references=("https://attack.mitre.org/techniques/T1053/005/",),
-        allow=(
-            FilterRule(
-                reason="Built-in Windows scheduled task",
-                signer="Microsoft",
-                value_matches=r"^%(windir|systemroot)%\\",
-                not_lolbin=True,
-            ),
-            FilterRule(
-                reason="Windows Defender / ATP scheduled task",
-                signer="Microsoft",
-                value_matches=r"Windows Defender",
-                not_lolbin=True,
-            ),
-            FilterRule(
-                reason="Built-in Windows service control task",
-                value_matches=r"sc\.exe\s+(start|config)\s+\w+",
-                signer="Microsoft",
-            ),
-            FilterRule(
-                reason="Built-in Windows task with absolute system path",
-                value_matches=r"(?i)^C:\\Windows\\",
-                signer="Microsoft",
-                not_lolbin=True,
-            ),
-            FilterRule(
-                reason="Built-in Microsoft task under Windows task folder",
-                path_matches=r"\\Microsoft\\Windows\\",
-                signer="Microsoft",
-                not_lolbin=True,
-            ),
-            FilterRule(
-                reason="Microsoft OneDrive scheduled task",
-                value_matches=r"Microsoft\\OneDrive\\",
-                signer="Microsoft",
-                not_lolbin=True,
-            ),
-            FilterRule(
-                reason="Microsoft Edge Update scheduled task",
-                value_matches=r"Microsoft\\EdgeUpdate\\MicrosoftEdgeUpdate\.exe",
-                signer="Microsoft",
-                not_lolbin=True,
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
-        """Parse scheduled task XML files and extract Exec action command lines."""
+        """Parse scheduled task XML files and extract their executable actions."""
         findings: list[Finding] = []
 
-        tasks_dir = self.filesystem.image_root / "Windows" / "System32" / "Tasks"
-        if not tasks_dir.is_dir():
+        tasks_root = self._tasks_root()
+        if not safe_is_dir(tasks_root):
             return findings
 
-        self._walk_tasks(tasks_dir, findings)
+        self._walk_tasks(tasks_root, findings)
         return findings
+
+    def _tasks_root(self) -> Path:
+        """Return the System32\\Tasks directory under the image root."""
+        return self.filesystem.image_root / _TASKS_RELATIVE
 
     def _walk_tasks(
         self,
@@ -102,12 +69,10 @@ class ScheduledTaskFiles(PersistencePlugin):
         if depth >= _MAX_DEPTH:
             return
 
-        entries = safe_iterdir(directory)
-
-        for entry in entries:
-            if entry.is_dir():
+        for entry in safe_iterdir(directory):
+            if safe_is_dir(entry):
                 self._walk_tasks(entry, findings, depth + 1)
-            elif entry.is_file():
+            elif safe_is_file(entry):
                 self._parse_task_xml(entry, findings)
 
     def _parse_task_xml(
@@ -115,37 +80,92 @@ class ScheduledTaskFiles(PersistencePlugin):
         path: Path,
         findings: list[Finding],
     ) -> None:
-        """Extract Command and Arguments from each Exec element in a task XML file."""
+        """Extract every Exec and ComHandler action from one task XML file."""
         try:
-            tree = DefusedET.parse(path)
-        except Exception:
-            logger.debug("Failed to parse task XML: %s", path, exc_info=True)
+            tree = DefusedET.parse(_io_path(path))
+        except Exception as exc:
+            record_artifact_failure(self.definition.id, path, exc)
             return
 
         root = tree.getroot()
-        ns = ""
+        namespace = ""
         if root.tag.startswith("{"):
-            ns = root.tag.split("}")[0] + "}"
+            namespace = root.tag.split("}")[0] + "}"
 
-        for exec_elem in root.iter(f"{ns}Exec"):
-            command = exec_elem.findtext(f"{ns}Command", "")
-            args = exec_elem.findtext(f"{ns}Arguments", "")
+        task_name = str(PureWindowsPath(path.relative_to(self._tasks_root())))
+
+        for exec_element in root.iter(f"{namespace}Exec"):
+            command = exec_element.findtext(f"{namespace}Command", "")
+            arguments = exec_element.findtext(f"{namespace}Arguments", "")
             if not command:
                 continue
 
-            task_name = str(
-                PureWindowsPath(
-                    path.relative_to(
-                        self.filesystem.image_root / "Windows" / "System32" / "Tasks"
-                    )
-                )
-            )
-            value = f"{command} {args}".strip() if args else command
+            value = f"{command} {arguments}".strip() if arguments else command
+            findings.append(self._task_finding(task_name, value))
+
+        for com_element in root.iter(f"{namespace}ComHandler"):
+            clsid = (com_element.findtext(f"{namespace}ClassId", "") or "").strip()
+            image = self._com_server_image(clsid)
+            if not image:
+                continue
 
             findings.append(
-                self._make_finding(
-                    path=f"{_TASKS_DIR}\\{task_name}",
-                    value=value,
-                    access=AccessLevel.SYSTEM,
+                self._task_finding(
+                    task_name,
+                    image,
+                    description=(
+                        f"ComHandler action activating COM class {clsid} in the "
+                        "Task Scheduler host process."
+                    ),
                 )
             )
+
+    # A CLSID registering neither server is deliberately not emitted: it yields
+    # nothing to hash, sign or classify, so the pipeline cannot assess it.
+    def _com_server_image(self, clsid: str) -> str:
+        """Resolve a ComHandler CLSID to the server image the scheduler would load."""
+        if not clsid.startswith("{"):
+            return ""
+
+        hive = self.context.open_hive_by_name("SOFTWARE")
+        if hive is None:
+            return ""
+
+        inproc_server = self.context.resolve_clsid_inproc(hive, clsid)
+        if inproc_server:
+            return inproc_server
+
+        return self.context.resolve_clsid_default(
+            hive, f"Classes\\CLSID\\{clsid}\\LocalServer32"
+        )
+
+    def _task_finding(
+        self,
+        task_name: str,
+        value: str,
+        description: str = "",
+    ) -> Finding:
+        """Build the finding for one task action, carrying the task's time evidence."""
+        task_path = f"{_TASKS_DIR}\\{task_name}"
+        event_key = f"\\{task_name}"
+        return self._make_finding(
+            path=task_path,
+            value=value,
+            access=AccessLevel.SYSTEM,
+            description=description,
+            time_evidence=(
+                FileWriteTime(path=task_path),
+                EventLogTime(
+                    channel="Security",
+                    event_ids=(4698, 4699),
+                    match_field="TaskName",
+                    match_value=event_key,
+                ),
+                EventLogTime(
+                    channel="Microsoft-Windows-TaskScheduler/Operational",
+                    event_ids=(106, 140, 141),
+                    match_field="TaskName",
+                    match_value=event_key,
+                ),
+            ),
+        )

@@ -1,9 +1,10 @@
+"""Detection for Disk Cleanup Handler Hijack."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
     Finding,
 )
 from pyrsistencesniper.plugins import register_plugin
@@ -14,6 +15,8 @@ _VOLUME_CACHES_PATH = r"Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches"
 
 @register_plugin
 class DiskCleanupHandler(PersistencePlugin):
+    """Detects Disk Cleanup Handler Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="disk_cleanup_handler",
         technique="Disk Cleanup Handler Hijack",
@@ -25,41 +28,29 @@ class DiskCleanupHandler(PersistencePlugin):
             "during cleanup operations."
         ),
         references=("https://attack.mitre.org/techniques/T1546/015/",),
-        allow=(
-            FilterRule(
-                reason="Built-in disk cleanup handler",
-                value_matches=r"\\system32\\",
-                signer="Microsoft",
-                not_lolbin=True,
-            ),
-            FilterRule(
-                reason="Built-in disk cleanup DLL",
-                value_matches=r"(ieframe|shell32|dataclen|setupcln)\.dll$",
-                signer="Microsoft",
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
+        """Report the DLL behind every registered VolumeCaches cleanup handler."""
         findings: list[Finding] = []
 
-        tree = self.hive_ops.load_subtree("SOFTWARE", _VOLUME_CACHES_PATH)
+        tree = self.context.load_subtree("SOFTWARE", _VOLUME_CACHES_PATH)
         if tree is None:
             return findings
 
-        hive = self.hive_ops.open_hive("SOFTWARE")
+        hive = self.context.open_hive_by_name("SOFTWARE")
         if hive is None:
             return findings
 
         for handler, node in tree.children():
-            val = node.get("(Default)")
-            clsid = str(val) if val else ""
+            default_value = node.get("(Default)")
+            clsid = str(default_value) if default_value else ""
 
             if not clsid or not clsid.startswith("{"):
                 continue
 
             inproc_path = f"Classes\\CLSID\\{clsid}\\InprocServer32"
-            dll_path = self.hive_ops.resolve_clsid_default(hive, inproc_path)
+            dll_path = self.context.resolve_clsid_default(hive, inproc_path)
 
             if not dll_path:
                 continue

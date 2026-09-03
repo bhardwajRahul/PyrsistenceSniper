@@ -1,8 +1,12 @@
+"""Tests for the boot and Session Manager execute plugins (T1547.001)."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
 from pyrsistencesniper.core.models import Finding, MatchResult
+from pyrsistencesniper.core.profile import DetectionProfile
 from pyrsistencesniper.plugins.T1547.boot_execute import (
     BootExecute,
     PlatformExecute,
@@ -20,96 +24,77 @@ if TYPE_CHECKING:
 
 _SYSTEM_HIVE = "/fake/SYSTEM"
 
+_DECLARATIVE_CASES: list[tuple[type, str, str, str]] = [
+    (BootExecute, "BootExecute", "evil.exe", _SYSTEM_HIVE),
+    (SetupExecute, "SetupExecute", "setup_evil.exe", _SYSTEM_HIVE),
+    (PlatformExecute, "PlatformExecute", "plat_evil.exe", _SYSTEM_HIVE),
+    (SessionManagerExecute, "Execute", "smexec.exe", _SYSTEM_HIVE),
+    (S0InitialCommand, "S0InitialCommand", "s0cmd.exe", _SYSTEM_HIVE),
+    (ServiceControlManagerExtension, "evil_dll", r"C:\evil.dll", _SYSTEM_HIVE),
+    (
+        SessionManagerSubSystems,
+        "Windows",
+        r"%SystemRoot%\system32\evil.exe",
+        _SYSTEM_HIVE,
+    ),
+]
 
-def test_boot_execute_happy(tmp_path: Path) -> None:
-    node = make_node(values={"BootExecute": "evil.exe"})
-    plugin = make_plugin(BootExecute, tmp_path)
-    setup_hklm(plugin, node, hive_path=_SYSTEM_HIVE)
+
+@pytest.mark.parametrize(
+    ("plugin_cls", "value_key", "value_data", "hive_path"),
+    _DECLARATIVE_CASES,
+    ids=[case[0].__name__ for case in _DECLARATIVE_CASES],
+)
+def test_declarative_happy_path(
+    tmp_path: Path,
+    plugin_cls: type,
+    value_key: str,
+    value_data: str,
+    hive_path: str,
+) -> None:
+    """Each declarative plugin produces a finding when its registry value is present."""
+    node = make_node(values={value_key: value_data})
+    plugin = make_plugin(plugin_cls, tmp_path)
+    setup_hklm(plugin, node, hive_path=hive_path)
     findings = plugin.run()
     assert len(findings) >= 1
-    assert "evil.exe" in findings[0].value
-
-
-def test_setup_execute_happy(tmp_path: Path) -> None:
-    node = make_node(values={"SetupExecute": "setup_evil.exe"})
-    plugin = make_plugin(SetupExecute, tmp_path)
-    setup_hklm(plugin, node, hive_path=_SYSTEM_HIVE)
-    findings = plugin.run()
-    assert len(findings) >= 1
-    assert "setup_evil.exe" in findings[0].value
-
-
-def test_platform_execute_happy(tmp_path: Path) -> None:
-    node = make_node(values={"PlatformExecute": "plat_evil.exe"})
-    plugin = make_plugin(PlatformExecute, tmp_path)
-    setup_hklm(plugin, node, hive_path=_SYSTEM_HIVE)
-    findings = plugin.run()
-    assert len(findings) >= 1
-    assert "plat_evil.exe" in findings[0].value
-
-
-def test_session_manager_execute_happy(tmp_path: Path) -> None:
-    node = make_node(values={"Execute": "smexec.exe"})
-    plugin = make_plugin(SessionManagerExecute, tmp_path)
-    setup_hklm(plugin, node, hive_path=_SYSTEM_HIVE)
-    findings = plugin.run()
-    assert len(findings) >= 1
-    assert "smexec.exe" in findings[0].value
-
-
-def test_s0_initial_command_happy(tmp_path: Path) -> None:
-    node = make_node(values={"S0InitialCommand": "s0cmd.exe"})
-    plugin = make_plugin(S0InitialCommand, tmp_path)
-    setup_hklm(plugin, node, hive_path=_SYSTEM_HIVE)
-    findings = plugin.run()
-    assert len(findings) >= 1
-    assert "s0cmd.exe" in findings[0].value
-
-
-def test_scm_extension_happy(tmp_path: Path) -> None:
-    node = make_node(values={"evil_dll": "C:\\evil.dll"})
-    plugin = make_plugin(ServiceControlManagerExtension, tmp_path)
-    setup_hklm(plugin, node, hive_path=_SYSTEM_HIVE)
-    findings = plugin.run()
-    assert len(findings) >= 1
-    assert "evil.dll" in findings[0].value
-
-
-def test_session_manager_subsystems_happy(tmp_path: Path) -> None:
-    node = make_node(values={"Windows": r"%SystemRoot%\system32\evil.exe"})
-    plugin = make_plugin(SessionManagerSubSystems, tmp_path)
-    setup_hklm(plugin, node, hive_path=_SYSTEM_HIVE)
-    findings = plugin.run()
-    assert len(findings) >= 1
-    assert "evil.exe" in findings[0].value
-
-
-def test_session_manager_subsystems_empty(tmp_path: Path) -> None:
-    node = make_node()
-    plugin = make_plugin(SessionManagerSubSystems, tmp_path)
-    setup_hklm(plugin, node, hive_path=_SYSTEM_HIVE)
-    assert plugin.run() == []
+    assert any(value_data in finding.value for finding in findings)
+    assert all("T1547" in finding.mitre_id for finding in findings)
 
 
 class TestSubSystemsFilterRule:
-    """Tests for the fixed csrss.exe value_matches + signer FilterRule (allow[0])."""
+    """Cases for the profile rule that allows a signed csrss.exe and nothing else."""
 
-    rule = SessionManagerSubSystems.definition.allow[0]
+    rule = next(
+        allow_rule
+        for allow_rule in DetectionProfile.load(None)
+        .policy_for("session_manager_subsystems")
+        .allow
+        if "csrss" in allow_rule.value_matches
+    )
 
-    def test_csrss_signed_full(self) -> None:
-        f = Finding(
-            value=r"%SystemRoot%\system32\csrss.exe ObjectDirectory=\Windows",
-            signer="Microsoft Windows",
-        )
-        assert self.rule.match_result(f) == MatchResult.FULL
-
-    def test_csrss_unsigned_partial(self) -> None:
-        f = Finding(
-            value=r"%SystemRoot%\system32\csrss.exe ObjectDirectory=\Windows",
-            signer="",
-        )
-        assert self.rule.match_result(f) == MatchResult.PARTIAL
-
-    def test_evil_exe_none(self) -> None:
-        f = Finding(value=r"%SystemRoot%\system32\evil.exe", signer="Microsoft Windows")
-        assert self.rule.match_result(f) == MatchResult.NONE
+    @pytest.mark.parametrize(
+        ("value", "signer", "expected"),
+        [
+            (
+                r"%SystemRoot%\system32\csrss.exe ObjectDirectory=\Windows",
+                "Microsoft Windows",
+                MatchResult.FULL,
+            ),
+            (
+                r"%SystemRoot%\system32\csrss.exe ObjectDirectory=\Windows",
+                "",
+                MatchResult.PARTIAL,
+            ),
+            (
+                r"%SystemRoot%\system32\evil.exe",
+                "Microsoft Windows",
+                MatchResult.NONE,
+            ),
+        ],
+        ids=["csrss_signed_full", "csrss_unsigned_partial", "evil_exe_none"],
+    )
+    def test_match_result(self, value: str, signer: str, expected: MatchResult) -> None:
+        """An unsigned csrss line stays partial, so a swapped binary is not allowed."""
+        finding = Finding(value=value, signer=signer)
+        assert self.rule.match_result(finding) == expected

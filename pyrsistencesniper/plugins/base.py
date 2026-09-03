@@ -5,28 +5,33 @@ from __future__ import annotations
 from typing import ClassVar
 
 from pyrsistencesniper.core.context import AnalysisContext
-from pyrsistencesniper.core.models import AccessLevel, CheckDefinition, Finding
-from pyrsistencesniper.core.registry import HiveOps, execute_definition
+from pyrsistencesniper.core.models import (
+    AccessLevel,
+    CheckDefinition,
+    Finding,
+    TimeEvidence,
+)
+from pyrsistencesniper.detection.engine import execute_definition
+
+# Plugins filter at two levels, and the split is load-bearing.
+#   run(): reject values that are not valid findings at all - garbage data,
+#     non-executable flags, wrong value types. This is data quality, and nothing
+#     dropped here can be recovered with --min-severity.
+#   Detection profile allow/block rules: suppress values that are valid
+#     persistence entries but known-good defaults (explorer.exe for
+#     winlogon_shell). This is policy, and --min-severity info shows it again.
+# Suppress inside run() only when no evidence could make the value a finding.
 
 
 class PersistencePlugin:
-    """Base class for persistence detection plugins.
-
-    Subclasses provide a CheckDefinition and either rely on the built-in
-    declarative engine or override run() for custom detection logic.
-    """
+    """Base class for persistence detection plugins."""
 
     definition: ClassVar[CheckDefinition]
 
-    def __init__(
-        self, context: AnalysisContext, *, include_defaults: bool = False
-    ) -> None:
+    def __init__(self, context: AnalysisContext) -> None:
         self.context = context
         self.registry = context.registry
         self.filesystem = context.filesystem
-        self.profile = context.profile
-        self._include_defaults = include_defaults
-        self.hive_ops = HiveOps(context)
 
     def _make_finding(
         self,
@@ -35,6 +40,8 @@ class PersistencePlugin:
         access: AccessLevel,
         *,
         description: str = "",
+        resolve_target: str = "",
+        time_evidence: tuple[TimeEvidence, ...] = (),
     ) -> Finding:
         """Create a Finding populated with this plugin's definition metadata."""
         check = self.definition
@@ -48,26 +55,14 @@ class PersistencePlugin:
             hostname=self.context.hostname,
             check_id=check.id,
             references=check.references,
+            resolve_target=resolve_target,
+            time_evidence=time_evidence,
         )
 
     def run(self) -> list[Finding]:
-        """Execute the check. Override in subclasses for custom detection.
-
-        Filtering convention - plugins filter at two levels:
-
-        * **In run()**: reject values that are not valid findings (garbage
-          data, non-executable flags, wrong value types).  These are data
-          quality checks and apply even when ``--raw`` is used.
-        * **FilterRule (allow/block)**: suppress values that *are* valid
-          persistence entries but are known-good defaults (e.g.
-          ``explorer.exe`` for ``winlogon_shell``).  These are policy
-          decisions and are bypassed by ``--min-severity info``.
-        """
+        """Run the declarative engine; override for detection it cannot express."""
         return execute_definition(
             self.definition,
-            self.registry,
-            self.context.hive_path,
-            self.context.active_controlset,
-            self.context.user_profiles,
+            self.context,
             self._make_finding,
         )

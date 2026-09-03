@@ -1,24 +1,36 @@
+"""Detection for Explorer Context Menu Handlers."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
     Finding,
+    HiveProtocol,
 )
-from pyrsistencesniper.core.registry import registry_value_to_str
+from pyrsistencesniper.core.registry import registry_key_join, registry_value_to_str
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
-_CTX_MENU_PATHS: tuple[str, ...] = (
-    r"SOFTWARE\Classes\Directory\shellex\ContextMenuHandlers",
-    r"SOFTWARE\Classes\*\shellex\ContextMenuHandlers",
-    r"SOFTWARE\Classes\Folder\shellex\ContextMenuHandlers",
+_CTX_MENU_SUBJECTS: tuple[str, ...] = (
+    "Directory",
+    r"Directory\Background",
+    "Folder",
+    "Drive",
+    "AllFilesystemObjects",
+    "*",
 )
+_SHELLEX_SUFFIX = r"shellex\ContextMenuHandlers"
+_MACHINE_CLASSES_ROOT = "Classes"
+_CLSID_ROOTS: tuple[str, ...] = ("CLSID", r"Wow6432Node\CLSID")
+
+_ClsidLookup = tuple[HiveProtocol, str]
 
 
 @register_plugin
 class ExplorerContextMenu(PersistencePlugin):
+    """Detects Explorer Context Menu Handlers persistence entries."""
+
     definition = CheckDefinition(
         id="explorer_context_menu",
         technique="Explorer Context Menu Handlers",
@@ -27,39 +39,56 @@ class ExplorerContextMenu(PersistencePlugin):
             "Context-menu shell extensions (ContextMenuHandlers) are COM "
             "DLLs loaded by Explorer on right-click. Registering a "
             "malicious handler provides DLL-based persistence under SYSTEM "
-            "or the invoking user."
+            "or the invoking user. Both halves of HKCR are read: the "
+            "machine-wide SOFTWARE\\Classes and each user's UsrClass.dat, "
+            "which wins the merge and needs no administrator rights."
         ),
         references=("https://attack.mitre.org/techniques/T1547/001/",),
-        allow=(
-            FilterRule(
-                reason="Built-in context menu handler",
-                value_matches=r"(\\system32\\|\\Windows Defender\\)",
-                signer="Microsoft",
-                not_lolbin=True,
-            ),
-            FilterRule(
-                reason="Built-in shell extension DLL",
-                value_matches=r"(shell32|ieframe)\.dll$",
-                signer="Microsoft",
-            ),
-            FilterRule(
-                reason="7-Zip context menu handler",
-                value_matches=r"7-Zip\\7-zip\.dll",
-                not_lolbin=True,
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
+        """Report context menu handlers from both halves of the merged HKCR."""
         findings: list[Finding] = []
 
-        hive = self.hive_ops.open_hive("SOFTWARE")
-        if hive is None:
-            return findings
+        machine_lookups: tuple[_ClsidLookup, ...] = ()
+        machine_hive = self.context.open_hive_by_name("SOFTWARE")
+        if machine_hive is not None:
+            machine_lookups = ((machine_hive, _MACHINE_CLASSES_ROOT),)
+            self._scan_hive(
+                machine_hive,
+                _MACHINE_CLASSES_ROOT,
+                "HKLM\\SOFTWARE\\Classes",
+                AccessLevel.SYSTEM,
+                machine_lookups,
+                findings,
+            )
 
-        for ctx_path in _CTX_MENU_PATHS:
-            rel_path = ctx_path.split("\\", 1)[1] if "\\" in ctx_path else ctx_path
-            tree = self.registry.load_subtree(hive, rel_path)
+        for profile, user_hive in self.context.iter_usrclass_hives():
+            self._scan_hive(
+                user_hive,
+                "",
+                f"HKU\\{profile.username}\\Software\\Classes",
+                AccessLevel.USER,
+                ((user_hive, ""), *machine_lookups),
+                findings,
+            )
+
+        return findings
+
+    def _scan_hive(
+        self,
+        hive: HiveProtocol,
+        lookup_root: str,
+        display_root: str,
+        access: AccessLevel,
+        clsid_lookups: tuple[_ClsidLookup, ...],
+        findings: list[Finding],
+    ) -> None:
+        """Scan one hive's class registrations for context menu handlers."""
+        for subject in _CTX_MENU_SUBJECTS:
+            tree = self.registry.load_subtree(
+                hive, registry_key_join(lookup_root, subject, _SHELLEX_SUFFIX)
+            )
             if tree is None:
                 continue
 
@@ -68,18 +97,34 @@ class ExplorerContextMenu(PersistencePlugin):
                 if value_str is None:
                     continue
 
-                dll_path = self.hive_ops.resolve_clsid_inproc(hive, value_str)
+                dll_path = self._resolve_handler_dll(clsid_lookups, value_str)
                 if dll_path:
                     value_str = dll_path
                 elif "\\" not in value_str and not value_str.startswith("{"):
-                    continue  # Skip non-path, non-CLSID handler names
+                    continue
 
                 findings.append(
                     self._make_finding(
-                        path=f"HKLM\\{ctx_path}\\{handler}",
+                        path=registry_key_join(
+                            display_root, subject, _SHELLEX_SUFFIX, handler
+                        ),
                         value=value_str,
-                        access=AccessLevel.SYSTEM,
+                        access=access,
                     )
                 )
 
-        return findings
+    def _resolve_handler_dll(
+        self, clsid_lookups: tuple[_ClsidLookup, ...], clsid: str
+    ) -> str:
+        """Look a handler CLSID up in every class store and registry view offered."""
+        if not clsid.startswith("{"):
+            return ""
+        for lookup_hive, lookup_root in clsid_lookups:
+            for clsid_root in _CLSID_ROOTS:
+                dll_path = self.context.resolve_clsid_default(
+                    lookup_hive,
+                    registry_key_join(lookup_root, clsid_root, clsid, "InprocServer32"),
+                )
+                if dll_path:
+                    return dll_path
+        return ""

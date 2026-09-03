@@ -1,8 +1,9 @@
+"""Detection for Shell Launcher Override."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     CheckDefinition,
-    FilterRule,
     HiveScope,
     RegistryTarget,
 )
@@ -12,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class ShellLauncher(PersistencePlugin):
+    """Detects Shell Launcher Override persistence entries."""
+
     definition = CheckDefinition(
         id="shell_launcher",
         technique="Shell Launcher Override",
@@ -23,11 +26,6 @@ class ShellLauncher(PersistencePlugin):
             "every logon."
         ),
         references=("https://attack.mitre.org/techniques/T1547/001/",),
-        allow=(
-            FilterRule(
-                reason="Default shell launcher IniFileMapping", value_matches=r"^sys:"
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SOFTWARE\Policies\Microsoft\Windows\System",

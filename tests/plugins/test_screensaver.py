@@ -1,3 +1,5 @@
+"""Tests for SCRNSAVE.EXE screensaver hijack detection (T1546.002)."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +12,7 @@ from .conftest import make_node, make_plugin
 
 
 def _profiles() -> list[UserProfile]:
+    """Return one profile whose NTUSER.DAT is the only hive the scan can reach."""
     return [
         UserProfile(
             username="user1",
@@ -19,24 +22,25 @@ def _profiles() -> list[UserProfile]:
     ]
 
 
+def _plugin_with_screensaver(tmp_path: Path, scrnsave_exe: str) -> Screensaver:
+    """Build the plugin over a user hive whose Desktop key holds SCRNSAVE.EXE."""
+    plugin = make_plugin(Screensaver, tmp_path, user_profiles=_profiles())
+    plugin.registry.open_hive.return_value = MagicMock()
+    plugin.registry.load_subtree.return_value = make_node(
+        values={"SCRNSAVE.EXE": scrnsave_exe}
+    )
+    return plugin
+
+
 def test_screensaver_found(tmp_path: Path) -> None:
-    """User hive with SCRNSAVE.EXE -- produces USER finding."""
-    p = make_plugin(Screensaver, tmp_path, user_profiles=_profiles())
-    ntuser = MagicMock()
-    p.registry.open_hive.return_value = ntuser
-    node = make_node(values={"SCRNSAVE.EXE": "C:\\evil.scr"})
-    p.registry.load_subtree.return_value = node
-    findings = p.run()
+    """The screensaver runs in the logged-on user's session, so access is USER."""
+    findings = _plugin_with_screensaver(tmp_path, r"C:\evil.scr").run()
+
     assert len(findings) == 1
     assert "evil.scr" in findings[0].value
     assert findings[0].access_gained == AccessLevel.USER
 
 
 def test_screensaver_empty_value(tmp_path: Path) -> None:
-    """SCRNSAVE.EXE is empty string -- no findings."""
-    p = make_plugin(Screensaver, tmp_path, user_profiles=_profiles())
-    ntuser = MagicMock()
-    p.registry.open_hive.return_value = ntuser
-    node = make_node(values={"SCRNSAVE.EXE": "  "})
-    p.registry.load_subtree.return_value = node
-    assert p.run() == []
+    """A blank SCRNSAVE.EXE names no executable, so there is nothing to report."""
+    assert _plugin_with_screensaver(tmp_path, "  ").run() == []

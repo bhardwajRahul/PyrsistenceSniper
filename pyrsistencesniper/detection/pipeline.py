@@ -1,0 +1,212 @@
+"""Detection pipeline: discover, execute, resolve, classify, and enrich findings."""
+
+from __future__ import annotations
+
+import dataclasses
+import logging
+from collections.abc import Callable
+from pathlib import Path
+
+from pyrsistencesniper.core.context import AnalysisContext
+from pyrsistencesniper.core.models import (
+    AnnotatedResult,
+    CheckFailure,
+    Finding,
+    Severity,
+)
+from pyrsistencesniper.core.profile import DetectionProfile
+from pyrsistencesniper.core.registry import reset_artifact_failures
+from pyrsistencesniper.core.resolver import ResolutionPipeline
+from pyrsistencesniper.enrichment import run_enrichments
+from pyrsistencesniper.plugins import (
+    _PLUGIN_REGISTRY,
+    _discover_plugins,
+    failed_imports,
+)
+from pyrsistencesniper.plugins.base import PersistencePlugin
+from pyrsistencesniper.timeline.executor import TimelineExecutor
+
+logger = logging.getLogger(__name__)
+
+# Checks that raised during this scan. Reset per scan by reset_failures().
+_failures: list[CheckFailure] = []
+
+
+def reset_failures() -> None:
+    """Forget the check failures recorded by an earlier scan."""
+    _failures.clear()
+
+
+def failed_checks() -> tuple[CheckFailure, ...]:
+    """Return the checks that raised during this scan and produced nothing."""
+    return tuple(_failures)
+
+
+def _technique_matches(plugin_cls: type[PersistencePlugin], tokens: set[str]) -> bool:
+    """Match a check id or MITRE id; a bare T1547 also selects its sub-techniques."""
+    definition = plugin_cls.definition
+    if definition.id in tokens or definition.mitre_id in tokens:
+        return True
+    parent_technique = definition.mitre_id.split(".", 1)[0]
+    return parent_technique in tokens
+
+
+def _select_plugins(
+    profile: DetectionProfile,
+    technique_filter: tuple[str, ...],
+) -> list[type[PersistencePlugin]]:
+    """Discover plugins and filter by profile + technique selection."""
+    _discover_plugins()
+    for modname, error in failed_imports().items():
+        _failures.append(CheckFailure(check_id=modname, error=error))
+    tokens = set(technique_filter)
+
+    return [
+        plugin_cls
+        for plugin_cls in _PLUGIN_REGISTRY.values()
+        if profile.policy_for(plugin_cls.definition.id).enabled
+        and (not tokens or _technique_matches(plugin_cls, tokens))
+    ]
+
+
+def _execute_plugins(
+    plugins: list[type[PersistencePlugin]],
+    context: AnalysisContext,
+    progress: Callable[[str, int, int], None] | None,
+) -> list[Finding]:
+    """Execute each plugin and collect raw findings, isolating failures."""
+    findings: list[Finding] = []
+    total = len(plugins)
+
+    for index, plugin_cls in enumerate(plugins):
+        if progress is not None:
+            progress("Running checks", index + 1, total)
+        try:
+            plugin = plugin_cls(context=context)
+            findings.extend(plugin.run())
+        except Exception as exc:
+            logger.warning(
+                "Check %s failed and produced no findings: %s: %s",
+                plugin_cls.definition.id,
+                type(exc).__name__,
+                exc,
+            )
+            logger.debug("Check error details:", exc_info=True)
+            _failures.append(
+                CheckFailure(
+                    check_id=plugin_cls.definition.id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            )
+
+    return findings
+
+
+def _deduplicate(findings: list[Finding]) -> list[Finding]:
+    """Drop repeats within one check; the same value from two checks is signal."""
+    seen: set[tuple[str, str, str]] = set()
+    unique: list[Finding] = []
+    for finding in findings:
+        identity = (finding.check_id, finding.path.casefold(), finding.value)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        unique.append(finding)
+    return unique
+
+
+def _resolve_findings(
+    findings: list[Finding],
+    context: AnalysisContext,
+    progress: Callable[[str, int, int], None] | None,
+) -> list[Finding]:
+    """Resolve file metadata (exists, sha256, signer, ...) for each finding."""
+    resolver = ResolutionPipeline(context.filesystem)
+    total = len(findings)
+    resolved: list[Finding] = []
+
+    for index, finding in enumerate(findings):
+        if progress is not None:
+            progress("Resolving findings", index + 1, total)
+        try:
+            resolved.append(resolver.resolve(finding))
+        except Exception as exc:
+            logger.warning(
+                "Could not resolve metadata for %s finding: %s: %s",
+                finding.check_id,
+                type(exc).__name__,
+                exc,
+            )
+            logger.debug("Resolution error details:", exc_info=True)
+            resolved.append(finding)
+
+    return resolved
+
+
+def _timestamp_findings(
+    findings: list[Finding],
+    context: AnalysisContext,
+    mft_path: Path | None,
+    progress: Callable[[str, int, int], None] | None,
+) -> list[Finding]:
+    """Fill last-change columns from each finding's declared time evidence."""
+    executor = TimelineExecutor(context, mft_path=mft_path)
+    total = len(findings)
+    stamped: list[Finding] = []
+
+    for index, finding in enumerate(findings):
+        if progress is not None:
+            progress("Resolving timestamps", index + 1, total)
+        try:
+            stamped.append(executor.timestamp(finding))
+        except Exception as exc:
+            logger.warning(
+                "Could not resolve timestamps for %s finding: %s: %s",
+                finding.check_id,
+                type(exc).__name__,
+                exc,
+            )
+            logger.debug("Timestamp error details:", exc_info=True)
+            stamped.append(finding)
+
+    return stamped
+
+
+def _classify_and_filter(
+    findings: list[Finding],
+    profile: DetectionProfile,
+    min_severity: Severity,
+) -> list[Finding]:
+    """Classify each finding's severity. Keep only those at or above the threshold."""
+    result: list[Finding] = []
+    for finding in findings:
+        severity = profile.policy_for(finding.check_id).classify(finding)
+        updated = dataclasses.replace(finding, severity=severity)
+        if severity >= min_severity:
+            result.append(updated)
+    return result
+
+
+def run_pipeline(
+    context: AnalysisContext,
+    *,
+    profile: DetectionProfile,
+    technique_filter: tuple[str, ...] = (),
+    min_severity: Severity = Severity.MEDIUM,
+    mft_path: Path | None = None,
+    timeline: bool = True,
+    progress: Callable[[str, int, int], None] | None = None,
+) -> list[AnnotatedResult]:
+    """Run the full detection pipeline and return enriched, classified results."""
+    reset_failures()
+    reset_artifact_failures()
+    plugins = _select_plugins(profile, technique_filter)
+    if not plugins:
+        return []
+
+    raw = _execute_plugins(plugins, context, progress)
+    resolved = _resolve_findings(_deduplicate(raw), context, progress)
+    classified = _classify_and_filter(resolved, profile, min_severity)
+    if timeline:
+        classified = _timestamp_findings(classified, context, mft_path, progress)
+    return run_enrichments(classified, progress=progress)

@@ -1,3 +1,506 @@
+# Built-in allow/block rules for known-good Windows defaults.
+# Override or extend with --profile <your_profile.yaml>.
+
 allow: []
 block: []
-checks: {}
+
+checks:
+  # T1053 - Scheduled Tasks
+  ghost_task:
+    allow:
+      - reason: 'Default Windows task'
+        path_matches: 'Microsoft\\(Windows|OneCore)\\'
+
+  telemetry_controller:
+    allow:
+      - reason: 'Built-in compatibility appraiser command'
+        value_matches: '(?i)^(%windir%|%systemroot%|C:\\Windows)\\system32\\CompatTelRunner\.exe'
+        signer: 'Microsoft'
+      - reason: 'Inbox compatibility appraiser telemetry DLL'
+        value_matches: '(?i)^(aeinv|aemarebackup|appraiser|devinv|generaltel|invagent)\.dll$'
+        signer: 'Microsoft'
+      - reason: 'Inbox compatibility appraiser exported entry point'
+        value_matches: '(?i)^(BackupMareData|CreateDeviceInventory|DoScheduledTelemetryRun|GetApplicationKBs|RunGeneralTelemetry|RunUpdate|UpdateAvStatus|UpdateSoftwareInventoryW)( invsvc)?$'
+        signer: 'Microsoft'
+
+  scheduled_task_files:
+    allow:
+      - reason: 'Built-in Windows scheduled task'
+        value_matches: '^%(windir|systemroot)%\\'
+        signer: 'Microsoft'
+      - reason: 'Windows Defender / ATP scheduled task'
+        value_matches: 'Windows Defender'
+        signer: 'Microsoft'
+      - reason: 'Built-in Windows service control task'
+        value_matches: 'sc\.exe\s+(start|config)\s+\w+'
+        signer: 'Microsoft'
+      - reason: 'Built-in Windows task with absolute system path'
+        value_matches: '(?i)^C:\\Windows\\'
+        signer: 'Microsoft'
+      - reason: 'Built-in Microsoft task under Windows task folder'
+        path_matches: '\\Microsoft\\Windows\\'
+        signer: 'Microsoft'
+      - reason: 'Microsoft OneDrive scheduled task'
+        value_matches: 'Microsoft\\OneDrive\\'
+        signer: 'Microsoft'
+      - reason: 'Microsoft Edge Update scheduled task'
+        value_matches: 'Microsoft\\EdgeUpdate\\MicrosoftEdgeUpdate\.exe'
+        signer: 'Microsoft'
+      - reason: 'Windows Shell task ComHandler server'
+        value_matches: '(?i)^(%windir%|%systemroot%|C:\\Windows)\\system32\\shell32\.dll$'
+        signer: 'Microsoft'
+
+  # T1137 - Office Application Startup
+  office_addins:
+    allow:
+      - reason: 'Microsoft-signed OneDrive Office integration add-in'
+        value_matches: '^[a-z]:\\Users\\[^\\]+\\AppData\\Local\\Microsoft\\OneDrive\\[\d.]+\\(i386\\)?File(SyncShell|CoAuthLib)(64)?\.dll$'
+        signer: 'Microsoft'
+
+  # T1543 - Windows Services
+  service_failure_command:
+    allow:
+      - reason: 'No failure command configured'
+        value_matches: '^not used$'
+      - reason: 'NVIDIA display container service recovery'
+        value_matches: 'NVIDIA Corporation\\.*\\NvContainerRecovery\.bat'
+        signer: 'Nvidia'
+
+  windows_service_image_path:
+    allow:
+      - reason: 'svchost-hosted service'
+        value_matches: 'svchost\.exe\s+-k\b'
+        signer: 'Microsoft'
+      - reason: 'Inbox kernel driver service that omits ImagePath'
+        value_matches: '(?i)^(Beep|CimFS|exfat|fastfat|Fs_Rec|Msfs|MsRPC|Npfs|Ntfs|Null|ReFS|ReFSv1|Wof)\.sys$'
+        signer: 'Microsoft'
+      - reason: 'Built-in OS service'
+        value_matches: '(system32|syswow64|\\servicing\\|Microsoft\.NET\\|Windows Media Player)\\'
+        signer: 'Microsoft'
+      - reason: 'Windows Defender / ATP service'
+        value_matches: 'Windows Defender'
+        signer: 'Microsoft'
+      - reason: 'Default Windows Installer service'
+        value_matches: 'msiexec\.exe'
+        signer: 'Microsoft'
+      - reason: 'Microsoft Edge / Edge Update service'
+        value_matches: 'Microsoft\\(EdgeUpdate\\MicrosoftEdgeUpdate|Edge\\.*\\elevation_service)\.exe'
+        signer: 'Microsoft'
+      - reason: 'Google Chrome / Update service'
+        value_matches: 'Google\\(GoogleUpdater\\.*\\updater|Chrome\\.*\\elevation_service)\.exe'
+        signer: 'Google'
+      - reason: 'Windows TrustedInstaller'
+        value_matches: 'TrustedInstaller\.exe'
+        signer: 'Microsoft'
+      - reason: 'Windows Subsystem for Linux service'
+        value_matches: 'WSL\\wslservice\.exe'
+        signer: 'Microsoft'
+      - reason: '.NET Framework shared hosting'
+        value_matches: 'Microsoft\.NET\\.*\\SMSvcHost\.exe'
+        signer: 'Microsoft'
+
+  windows_service_dll:
+    allow:
+      - reason: 'Built-in OS service DLL'
+        value_matches: 'system32\\'
+        signer: 'Microsoft'
+
+  # T1546 - Event Triggered Execution
+  ae_debug:
+    allow:
+      - reason: 'Known JIT debugger'
+        value_matches: '(vsjitdebugger|drwtsn32)'
+
+  amsi_providers:
+    allow:
+      - reason: 'Windows Defender AMSI provider'
+        value_matches: 'MpOav\.dll'
+        signer: 'Microsoft'
+
+  app_paths:
+    allow:
+      - reason: 'Built-in OS application'
+        value_matches: '\\system32\\'
+        signer: 'Microsoft'
+      - reason: 'Microsoft application in Program Files'
+        value_matches: '(?i)\\Program Files( \(x86\))?\\'
+        signer: 'Microsoft'
+      - reason: 'Google Chrome application path'
+        value_matches: 'Google\\Chrome\\Application\\chrome\.exe'
+        signer: 'Google'
+
+  assistive_technology:
+    allow:
+      - reason: 'Default Windows accessibility tool (.exe)'
+        value_matches: '(?i)(EoAExperiences|LiveCaptions|Magnify|Narrator|osk|sapisvr|VoiceAccess)\.exe'
+        signer: 'Microsoft'
+      - reason: 'Default Windows accessibility tool (bare name)'
+        value_matches: '(?i)^(cursorindicator|livecaptions|magnifierpane|narrator|osk|speechreco|voiceaccess)$'
+      - reason: 'Default Windows accessibility tool (bare name, Screen Tint)'
+        value_matches: '(?i)^screentint$'
+
+  wmi_event_subscription:
+    allow:
+      - reason: 'Stock Service Control Manager event subscription'
+        value_matches: '^NTEventLogEventConsumer "SCM Event Log Consumer" bound to filter "SCM Event Log Filter"'
+
+  # Each rule pins both the source CLSID and the forwarding target; matching the
+  # target alone would also suppress an attacker who repoints an unrelated CLSID
+  # at one of these classes. Every target was resolved to a Microsoft-shipped
+  # COM server before being listed.
+  com_treat_as:
+    allow:
+      - reason: 'Shipped Microsoft TreatAs forwarding to packager.dll'
+        path_matches: '\\CLSID\\\{(00020C01-0000-0000-C000-000000000046|00022601-0000-0000-C000-000000000046|00022602-0000-0000-C000-000000000046|00022603-0000-0000-C000-000000000046|0003000C-0000-0000-C000-000000000046|0003000D-0000-0000-C000-000000000046|0003000E-0000-0000-C000-000000000046)\}\\TreatAs$'
+        value_matches: '^\{F20DA720-C02F-11CE-927B-0800095AE340\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to Excel'
+        path_matches: '\\CLSID\\\{(00020810-0000-0000-C000-000000000046|00030000-0000-0000-C000-000000000046|00030002-0000-0000-C000-000000000046)\}\\TreatAs$'
+        value_matches: '^\{00020820-0000-0000-C000-000000000046\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to Excel'
+        path_matches: '\\CLSID\\\{(00020811-0000-0000-C000-000000000046|00030001-0000-0000-C000-000000000046)\}\\TreatAs$'
+        value_matches: '^\{00020821-0000-0000-C000-000000000046\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to Word'
+        path_matches: '\\CLSID\\\{(00020900-0000-0000-C000-000000000046|00020901-0000-0000-C000-000000000046)\}\\TreatAs$'
+        value_matches: '^\{00020906-0000-0000-C000-000000000046\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to PowerPoint'
+        path_matches: '\\CLSID\\\{(00044851-0000-0000-C000-000000000046|EA7BAE70-FB3B-11CD-A903-00AA00510EA3)\}\\TreatAs$'
+        value_matches: '^\{64818D10-4F9B-11CF-86EA-00AA00B929E8\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to PowerPoint'
+        path_matches: '\\CLSID\\\{(000498C4-0000-0000-C000-000000000046|EA7BAE71-FB3B-11CD-A903-00AA00510EA3)\}\\TreatAs$'
+        value_matches: '^\{64818D11-4F9B-11CF-86EA-00AA00B929E8\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to Office Interceptor.dll'
+        path_matches: '\\CLSID\\\{(9F9C4924-C3F3-4459-A396-9E9E0D8B83D1|BDEADEF2-C265-11D0-BCED-00A0C90AB50F)\}\\TreatAs$'
+        value_matches: '^\{9203C2CB-1DC1-482D-967E-597AFF270F0D\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to Office Interceptor.dll'
+        path_matches: '\\CLSID\\\{(BDEADEF4-C265-11D0-BCED-00A0C90AB50F)\}\\TreatAs$'
+        value_matches: '^\{BDEADEF5-C265-11D0-BCED-00A0C90AB50F\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to Outlook'
+        path_matches: '\\CLSID\\\{(0006F033-0000-0000-C000-000000000046)\}\\TreatAs$'
+        value_matches: '^\{0006F03A-0000-0000-C000-000000000046\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to Outlook OUTLCTL.DLL'
+        path_matches: '\\CLSID\\\{(0006F063-0000-0000-C000-000000000046)\}\\TreatAs$'
+        value_matches: '^\{261B8CA9-3BAF-4BD0-B0C2-BF04286785C6\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to Ink tiptsf.dll'
+        path_matches: '\\CLSID\\\{(F744E496-1B5A-489E-81DC-FBD7AC6298A8)\}\\TreatAs$'
+        value_matches: '^\{802B1FB9-056B-4720-B0CC-80D23B71171E\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to mspaint.exe'
+        path_matches: '\\CLSID\\\{(0003000A-0000-0000-C000-000000000046)\}\\TreatAs$'
+        value_matches: '^\{D3E34B21-9D75-101A-8C3D-00AA001A1652\}$'
+      - reason: 'Shipped Microsoft TreatAs forwarding to oleaut32.dll'
+        path_matches: '\\CLSID\\\{(D14E3180-11FD-11CE-B841-00AA004CD6D8)\}\\TreatAs$'
+        value_matches: '^\{0BE35204-8F91-11CE-9DE3-00AA004BB851\}$'
+
+  disk_cleanup_handler:
+    allow:
+      - reason: 'Built-in disk cleanup handler'
+        value_matches: '\\system32\\'
+        signer: 'Microsoft'
+      - reason: 'Built-in disk cleanup DLL'
+        value_matches: '(ieframe|shell32|dataclen|setupcln)\.dll$'
+        signer: 'Microsoft'
+
+  file_association_hijack:
+    allow:
+      - reason: 'Default system handler shipped in the OS or Program Files'
+        value_matches: '(?i)^"?(%SystemRoot%|%ProgramFiles(\(x86\))?%|C:\\Windows|C:\\Program Files( \(x86\))?)\\'
+        signer: 'Microsoft'
+      - reason: 'Default self-executing handler for executable file classes'
+        path_matches: '(?i)\\Classes\\(exe|bat|cmd|com|pif|scr)file\\shell\\open\\command$'
+        value_matches: '^"%1"(\s+%\*)?$'
+      - reason: 'Default Windows Script Host handler for script file classes'
+        path_matches: '(?i)\\Classes\\(JSE?|VBS|VBE|WS[FH])File\\shell\\open\\command$'
+        value_matches: '(?i)^"?(%SystemRoot%|C:\\Windows)\\System32\\[WC]Script\.exe"?\s+"%1"\s+%\*$'
+        signer: 'Microsoft'
+
+  netsh_helper:
+    allow:
+      - reason: 'Built-in netsh helper'
+        value_matches: '^(ifmon|rasmontr|authfwcfg|dhcpcmonitor|nshdnsclient|dot3cfg|fwcfg|hnetmon|netiohlp|netprofm|nettrace|nshhttp|nshipsec|nshwfp|rpcnsh|WcnNetsh|whhelper|wlancfg|wshelper|wwancfg|peerdistsh)\.dll$'
+        signer: 'Microsoft'
+
+  protocol_handler_hijack:
+    allow:
+      - reason: 'Default ms-msdt handler'
+        value_matches: 'msdt\.exe'
+        signer: 'Microsoft'
+      - reason: 'Default Windows protocol handler'
+        signer: 'Microsoft'
+      - reason: 'Default Windows Explorer protocol handler'
+        value_matches: 'explorer\.exe'
+        signer: 'Microsoft'
+
+  search_protocol_handler:
+    allow:
+      - reason: 'Default Windows search handler'
+        value_matches: 'Explorer\.exe'
+        signer: 'Microsoft'
+
+  # Registrations here are per-user, so every value sits under AppData and the
+  # location alone proves nothing; only the signer settles it, and only once the
+  # resource index is stripped and the image resolved from the collection. The
+  # Office forms cache is the exception: generated, unsigned, pinned by name.
+  typelib_hijack:
+    allow:
+      - reason: 'Microsoft-signed type library'
+        signer: 'Microsoft'
+      - reason: 'Office forms type library cache'
+        value_matches: '^[a-z]:\\Users\\[^\\]+\\AppData\\Local\\Temp\\(Excel|Word|PowerPoint|Outlook|Access)\d+\.\d+\\MSForms\.exd$'
+
+  wer_runtime_exception:
+    allow:
+      - reason: 'Known WER helper module'
+        value_matches: '(mscordacwks|iertutil|msiwer|wbiosrvc|msedge_wer)\.dll'
+        signer: 'Microsoft'
+      - reason: 'Google Chrome WER helper'
+        value_matches: 'chrome_wer\.dll'
+        signer: 'Google'
+
+  windows_terminal:
+    allow:
+      - reason: 'Default Windows shell'
+        value_matches: '(?i)^(%SystemRoot%\\System32\\)?cmd\.exe$'
+        signer: 'Microsoft'
+      - reason: 'Default PowerShell'
+        value_matches: '(?i)^(%SystemRoot%\\System32\\WindowsPowerShell\\v1\.0\\)?powershell\.exe$'
+        signer: 'Microsoft'
+      - reason: 'Default PowerShell 7+'
+        value_matches: '(?i)^pwsh\.exe$'
+        signer: 'Microsoft'
+
+  # T1547 - Boot/Logon Persistence
+  active_setup:
+    allow:
+      - reason: 'Built-in active setup component'
+        value_matches: '\\system32\\'
+        signer: 'Microsoft'
+      - reason: 'Built-in 32-bit active setup component'
+        value_matches: '\\syswow64\\'
+        signer: 'Microsoft'
+      - reason: 'Built-in media/IE setup'
+        value_matches: '(unregmp2|ie4uinit)\.exe'
+        signer: 'Microsoft'
+      - reason: 'Google Chrome per-user setup'
+        value_matches: 'Google\\Chrome\\Application\\.*\\Installer\\chrmstp\.exe'
+        signer: 'Google'
+      - reason: 'Microsoft Edge per-user setup'
+        value_matches: 'Microsoft\\Edge\\Application\\.*\\Installer\\setup\.exe'
+        signer: 'Microsoft'
+
+  authentication_packages:
+    allow:
+      - reason: 'Default auth package'
+        value_matches: '^msv1_0$'
+
+  boot_execute:
+    allow:
+      - reason: 'Default Windows boot-time disk check'
+        value_matches: '^autocheck\s+autochk'
+
+  explorer_bho:
+    allow:
+      - reason: 'Microsoft Edge IE-to-Edge redirection BHO'
+        value_matches: 'ie_to_edge_bho(_64)?\.dll'
+        signer: 'Microsoft'
+
+  explorer_context_menu:
+    allow:
+      - reason: 'Built-in context menu handler'
+        value_matches: '(\\system32\\|\\Windows Defender\\)'
+        signer: 'Microsoft'
+      - reason: 'OneDrive sync status shell extension'
+        value_matches: '^[a-z]:\\Users\\[^\\]+\\AppData\\Local\\Microsoft\\OneDrive\\[\d.]+\\(i386\\)?FileSyncShell(64)?\.dll$'
+        signer: 'Microsoft'
+      - reason: 'Built-in shell extension DLL'
+        value_matches: '(shell32|ieframe)\.dll$'
+        signer: 'Microsoft'
+      - reason: '7-Zip context menu handler'
+        value_matches: '7-Zip\\7-zip\.dll'
+
+  lsa_cfg_flags:
+    allow:
+      - reason: 'Credential Guard enabled'
+        value_matches: '^[12]$'
+
+  lsa_run_as_ppl:
+    allow:
+      - reason: 'LSA protection enabled'
+        value_matches: '^[12]$'
+
+  print_monitors:
+    allow:
+      - reason: 'Default Windows print monitor'
+        value_matches: '^(localspl|tcpmon|usbmon|WSDMon|APMon|AppMon|FXSMON|msonppmon)\.dll$'
+        signer: 'Microsoft'
+
+  print_processors:
+    allow:
+      - reason: 'Default Windows print processor'
+        value_matches: '^winprint\.dll$'
+        signer: 'Microsoft'
+
+  rdp_wds_startup:
+    allow:
+      - reason: 'Default RDP startup program'
+        value_matches: '^rdpclip$'
+
+  run_keys:
+    allow:
+      - reason: 'Windows Security Health tray'
+        value_matches: 'SecurityHealthSystray'
+      - reason: 'Realtek HD Audio service'
+        value_matches: 'RtkAudUService64\.exe'
+        signer: 'Realtek'
+      - reason: 'Waves MaxxAudio service'
+        value_matches: 'WavesSvc64\.exe'
+        signer: 'Waves'
+      - reason: 'Microsoft OneDrive auto-start'
+        value_matches: 'OneDrive\\OneDrive\.exe'
+        signer: 'Microsoft'
+      - reason: 'Microsoft OneDrive first start'
+        value_matches: 'System32\\OneDriveSetup\.exe'
+        signer: 'Microsoft'
+      - reason: 'Microsoft Edge WebView cleanup'
+        value_matches: 'Microsoft\\EdgeWebView\\.*\\Installer\\setup\.exe'
+        signer: 'Microsoft'
+      - reason: 'Windows Mail address book'
+        value_matches: 'Windows Mail\\wab\.exe'
+        signer: 'Microsoft'
+
+  security_packages:
+    allow:
+      - reason: 'Default Windows SSP'
+        value_matches: '^(kerberos|msv1_0|schannel|wdigest|tspkg|pku2u|cloudap)$'
+
+  session_manager_subsystems:
+    allow:
+      - reason: 'Default Windows subsystem configuration'
+        value_matches: 'csrss\.exe'
+        signer: 'Microsoft'
+
+  shell_launcher:
+    allow:
+      - reason: 'Default shell launcher IniFileMapping'
+        value_matches: '^sys:'
+
+  time_providers:
+    allow:
+      - reason: 'Default Windows time provider'
+        value_matches: 'w32time\.dll$'
+        signer: 'Microsoft'
+      - reason: 'Hyper-V time provider'
+        value_matches: 'vmictimeprovider\.dll$'
+        signer: 'Microsoft'
+
+  winlogon_notify_packages:
+    allow:
+      - reason: 'Default notification package'
+        value_matches: '^scecli$'
+
+  winlogon_shell:
+    allow:
+      - reason: 'Default Windows shell'
+        value_matches: '^explorer\.exe$'
+        signer: 'Microsoft'
+
+  winlogon_userinit:
+    allow:
+      - reason: 'Default Windows userinit'
+        value_matches: '(?i)^(([a-z]:\\Windows|%windir%|%systemroot%)\\system32\\)?userinit\.exe$'
+        signer: 'Microsoft'
+
+  winlogon_vmapplet:
+    allow:
+      - reason: 'Default Windows virtual memory applet'
+        value_matches: '(?i)^SystemPropertiesPerformance\.exe /pagefile$'
+        signer: 'Microsoft'
+
+  # T1556 - Modify Authentication Process
+  lsa_password_filter:
+    allow:
+      - reason: 'Default Windows Security Configuration Engine'
+        value_matches: '^scecli$'
+
+  network_provider_dll:
+    allow:
+      - reason: 'Default Windows network provider'
+        value_matches: '(ntlanman|davclnt|rdpnp|drprov|P9NP|vmhgfs)\.dll$'
+        signer: 'Microsoft'
+
+  # T1574 - DLL Hijacking
+  autodial_dll:
+    allow:
+      - reason: 'Default autodial DLL'
+        value_matches: 'rasadhlp\.dll$'
+        signer: 'Microsoft'
+
+  diagtrack_dll:
+    allow:
+      - reason: 'Default DiagTrack service'
+        value_matches: 'svchost\.exe'
+        signer: 'Microsoft'
+
+  diagtrack_listener_dll:
+    allow:
+      - reason: 'Default DiagTrack listener'
+        value_matches: 'Diagtrack-Listener\.etl'
+        signer: 'Microsoft'
+
+  gp_extension_dlls:
+    allow:
+      - reason: 'Built-in GP extension'
+        value_matches: '\\system32\\'
+        signer: 'Microsoft'
+      - reason: 'Built-in GP extension DLL'
+        value_matches: '^(gptext|scecli|appmgmts|fdeploy|auditcse|dmenrollengine|pwlauncher|dggpext|dot3gpclnt|wlgpclnt|AppManagementConfiguration|WorkFoldersGPExt)\.dll$'
+        signer: 'Microsoft'
+
+  hhctrl_ocx_dll:
+    allow:
+      - reason: 'Default HTML Help control'
+        value_matches: '(System32|SysWOW64)\\hhctrl\.ocx$'
+        signer: 'Microsoft'
+
+  mapi32_dll_path:
+    allow:
+      - reason: 'Default Windows Live Hotmail MAPI provider'
+        value_matches: '^(%ProgramFiles(\(x86\))?%|[a-z]:\\Program Files( \(x86\))?)\\Internet Explorer\\hmmapi\.dll$'
+        signer: 'Microsoft'
+
+  known_dlls:
+    allow:
+      - reason: 'Default Windows KnownDLL entry'
+        value_matches: '^(advapi32|clbcatq|combase|COMDLG32|COML2|CoreMessaging|CoreUIComponents|CRYPT32|difxapi|gdi32|gdiplus|GDI32Full|IMAGEHLP|IMM32|kernel32|KERNELBASE|MFC42u|MSCTF|MSVCP_WIN|MSVCRT|NORMALIZ|NSI|ntdll|OLEAUT32|OLE32|RPCRT4|sechost|Setupapi|SHCORE|SHELL32|shlwapi|TextShaping|ucrtbase|USER32|win32u|WINTRUST|WS2_32|WLDAP32)\.dll$'
+        signer: 'Microsoft'
+      - reason: 'Default Windows KnownDLL entry for ARM64 emulation on x64'
+        value_matches: '^(wowarmhw|xtajit|xtajitf|xtajitse|xtajit64|xtajit64se)\.dll$'
+      - reason: 'Microsoft-signed KnownDLL entry'
+        signer: 'Microsoft'
+
+  lsa_extensions:
+    allow:
+      - reason: 'Default LSA extension'
+        value_matches: '^lsasrv\.dll$'
+        signer: 'Microsoft'
+
+  minidump_auxiliary_dlls:
+    allow:
+      - reason: 'Default auxiliary DLL shipped beside a Microsoft runtime module'
+        value_matches: '(System32|SysWOW64|Microsoft\.NET\\Framework(64)?\\v[\d.]+|Microsoft\.NETCore\.App\\[\d.]+)\\(mscordacwks|mscordaccore|Chakradiag|jscript9diag|mrt_map)\.dll$'
+        signer: 'Microsoft'
+
+  msdtc_xa_dll:
+    allow:
+      - reason: 'Default MSDTC XA/OCI DLL'
+        value_matches: '^(xa80|oci)\.dll$'
+
+  winsock_auto_proxy:
+    allow:
+      - reason: 'Default Winsock provider'
+        value_matches: '(mswsock|napinsp|nlansp_c|winrnr|wshbth)\.dll$'
+        signer: 'Microsoft'
+
+  wu_service_startup_dll:
+    allow:
+      - reason: 'Default Windows Update DLL'
+        value_matches: 'wuaueng\.dll$'
+        signer: 'Microsoft'

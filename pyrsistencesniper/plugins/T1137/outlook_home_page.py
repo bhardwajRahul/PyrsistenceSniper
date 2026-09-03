@@ -1,3 +1,5 @@
+"""Detect Outlook folder Home Page URL persistence (T1137.004)."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -10,55 +12,49 @@ from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
 _OFFICE_VERSIONS: tuple[str, ...] = ("14.0", "15.0", "16.0")
-_OUTLOOK_FOLDERS: tuple[str, ...] = (
-    "Inbox",
-    "Calendar",
-    "Contacts",
-    "Drafts",
-    "Journal",
-    "Notes",
-    "Tasks",
-    "Deleted Items",
-    "Sent Items",
-    "Outbox",
-)
 
 
 @register_plugin
 class OutlookHomePage(PersistencePlugin):
+    """Detects Outlook Home Page Attack persistence entries."""
+
     definition = CheckDefinition(
         id="outlook_home_page",
         technique="Outlook Home Page Attack",
         mitre_id="T1137.004",
         description=(
-            "Outlook Folder Home Page URLs are loaded as embedded web "
-            "pages inside Outlook folder views, allowing execution of "
-            "arbitrary HTML/JavaScript/ActiveX content. This feature is "
-            "deprecated and never configured in standard deployments."
+            "An Outlook folder Home Page URL loads as an embedded web page "
+            "inside the folder view and runs arbitrary HTML, JavaScript and "
+            "ActiveX. Every folder under WebView is read, so user-created and "
+            "localized folder names are covered. The feature is deprecated and "
+            "unset in standard deployments."
         ),
         references=("https://attack.mitre.org/techniques/T1137/004/",),
     )
 
     def run(self) -> list[Finding]:
+        """Report every Outlook WebView folder that carries a Home Page URL."""
         findings: list[Finding] = []
 
-        for profile, hive in self.hive_ops.iter_user_hives():
+        for profile, hive in self.context.iter_user_hives():
             for version in _OFFICE_VERSIONS:
-                for folder in _OUTLOOK_FOLDERS:
-                    webview_path = (
-                        f"Software\\Microsoft\\Office\\{version}"
-                        f"\\Outlook\\WebView\\{folder}"
-                    )
-                    node = self.registry.load_subtree(hive, webview_path)
-                    if node is None:
-                        continue
-                    url_val = registry_value_to_str(node.get("URL"))
-                    if url_val is None:
+                webview_path = (
+                    f"Software\\Microsoft\\Office\\{version}\\Outlook\\WebView"
+                )
+                webview_node = self.registry.load_subtree(hive, webview_path)
+                if webview_node is None:
+                    continue
+                for folder, folder_node in webview_node.children():
+                    url_value = registry_value_to_str(folder_node.get("URL"))
+                    if url_value is None:
                         continue
                     findings.append(
                         self._make_finding(
-                            path=(f"HKU\\{profile.username}\\{webview_path}\\URL"),
-                            value=url_val,
+                            path=(
+                                f"HKU\\{profile.username}"
+                                f"\\{webview_path}\\{folder}\\URL"
+                            ),
+                            value=url_value,
                             access=AccessLevel.USER,
                         )
                     )

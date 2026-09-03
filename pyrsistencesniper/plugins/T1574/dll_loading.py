@@ -1,27 +1,23 @@
-"""T1574 DLL hijacking persistence plugins.
-
-Detects DLL search-order hijacking and side-loading via registry keys that
-specify loadable DLL paths.  Covers 16 declarative checks for known DLL
-override locations and 3 custom-scan plugins that walk subtrees for
-GP extensions, Winsock providers, and minidump auxiliary DLLs.
-"""
+"""Detections for registry keys that name a DLL the Windows loader will load."""
 
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
     Finding,
     HiveScope,
     RegistryTarget,
 )
+from pyrsistencesniper.core.registry import registry_value_to_str
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
 
 @register_plugin
 class NaturalLanguageDevelopmentPlatform(PersistencePlugin):
+    """Detects NLDP DLL Override persistence entries."""
+
     definition = CheckDefinition(
         id="nldp_dll",
         technique="NLDP DLL Override",
@@ -44,6 +40,8 @@ class NaturalLanguageDevelopmentPlatform(PersistencePlugin):
 
 @register_plugin
 class ChmHelper(PersistencePlugin):
+    """Detects CHM Helper DLL persistence entries."""
+
     definition = CheckDefinition(
         id="chm_helper_dll",
         technique="CHM Helper DLL",
@@ -66,6 +64,8 @@ class ChmHelper(PersistencePlugin):
 
 @register_plugin
 class HhctrlOcx(PersistencePlugin):
+    """Detects hhctrl.ocx DLL Override persistence entries."""
+
     definition = CheckDefinition(
         id="hhctrl_ocx_dll",
         technique="hhctrl.ocx DLL Override",
@@ -76,18 +76,15 @@ class HhctrlOcx(PersistencePlugin):
             "provides code execution when any HTML Help content is rendered."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
-        allow=(
-            FilterRule(
-                reason="Default HTML Help control",
-                value_matches=r"hhctrl\.ocx$",
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
-                path=r"SOFTWARE\Classes\CLSID\{adb880a6-d8ff-11cf-9377-00aa003b7a11}\InprocServer32",
+                path=(
+                    r"SOFTWARE\Classes\CLSID"
+                    r"\{adb880a6-d8ff-11cf-9377-00aa003b7a11}\InprocServer32"
+                ),
                 values="(Default)",
-                scope=HiveScope.HKLM,
+                scope=HiveScope.BOTH,
+                include_wow64=True,
             ),
         ),
     )
@@ -95,6 +92,8 @@ class HhctrlOcx(PersistencePlugin):
 
 @register_plugin
 class AutodialDll(PersistencePlugin):
+    """Detects AutodialDLL Override persistence entries."""
+
     definition = CheckDefinition(
         id="autodial_dll",
         technique="AutodialDLL Override",
@@ -105,13 +104,6 @@ class AutodialDll(PersistencePlugin):
             "execution in any process that uses WinSock."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
-        allow=(
-            FilterRule(
-                reason="Default autodial DLL",
-                value_matches=r"rasadhlp\.dll$",
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SYSTEM\{controlset}\Services\WinSock2\Parameters",
@@ -124,6 +116,8 @@ class AutodialDll(PersistencePlugin):
 
 @register_plugin
 class LsaExtensions(PersistencePlugin):
+    """Detects LSA Extensions DLL persistence entries."""
+
     definition = CheckDefinition(
         id="lsa_extensions",
         technique="LSA Extensions DLL",
@@ -134,13 +128,6 @@ class LsaExtensions(PersistencePlugin):
             "credentials and provide SYSTEM-level persistence."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
-        allow=(
-            FilterRule(
-                reason="Default LSA extension",
-                value_matches=r"^lsasrv\.dll$",
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SYSTEM\{controlset}\Control\LsaExtensionConfig\LsaSrv",
@@ -153,6 +140,8 @@ class LsaExtensions(PersistencePlugin):
 
 @register_plugin
 class ServerLevelPluginDll(PersistencePlugin):
+    """Detects DNS Server Level Plugin DLL persistence entries."""
+
     definition = CheckDefinition(
         id="server_level_plugin_dll",
         technique="DNS Server Level Plugin DLL",
@@ -175,6 +164,8 @@ class ServerLevelPluginDll(PersistencePlugin):
 
 @register_plugin
 class CryptoExpoOffload(PersistencePlugin):
+    """Detects Crypto ExpoOffload DLL persistence entries."""
+
     definition = CheckDefinition(
         id="crypto_expo_offload",
         technique="Crypto ExpoOffload DLL",
@@ -197,6 +188,8 @@ class CryptoExpoOffload(PersistencePlugin):
 
 @register_plugin
 class Direct3dDll(PersistencePlugin):
+    """Detects Direct3D Software Rasterizer DLL persistence entries."""
+
     definition = CheckDefinition(
         id="direct3d_dll",
         technique="Direct3D Software Rasterizer DLL",
@@ -219,6 +212,8 @@ class Direct3dDll(PersistencePlugin):
 
 @register_plugin
 class MsdtcXaDll(PersistencePlugin):
+    """Detects MSDTC XA DLL persistence entries."""
+
     definition = CheckDefinition(
         id="msdtc_xa_dll",
         technique="MSDTC XA DLL",
@@ -229,11 +224,6 @@ class MsdtcXaDll(PersistencePlugin):
             "in the SYSTEM context of the MSDTC service."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
-        allow=(
-            FilterRule(
-                reason="Default MSDTC XA/OCI DLL", value_matches=r"^(xa80|oci)\.dll$"
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SOFTWARE\Microsoft\MSDTC\MTxOCI",
@@ -251,6 +241,8 @@ class MsdtcXaDll(PersistencePlugin):
 
 @register_plugin
 class DiagTrackDll(PersistencePlugin):
+    """Detects DiagTrack DLL persistence entries."""
+
     definition = CheckDefinition(
         id="diagtrack_dll",
         technique="DiagTrack DLL",
@@ -261,13 +253,6 @@ class DiagTrackDll(PersistencePlugin):
             "persistence triggered by the telemetry service."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
-        allow=(
-            FilterRule(
-                reason="Default DiagTrack service",
-                value_matches=r"svchost\.exe",
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SYSTEM\{controlset}\Services\DiagTrack",
@@ -280,6 +265,8 @@ class DiagTrackDll(PersistencePlugin):
 
 @register_plugin
 class DiagTrackListenerDll(PersistencePlugin):
+    """Detects DiagTrack Listener DLL persistence entries."""
+
     definition = CheckDefinition(
         id="diagtrack_listener_dll",
         technique="DiagTrack Listener DLL",
@@ -290,13 +277,6 @@ class DiagTrackListenerDll(PersistencePlugin):
             "SYSTEM-level persistence at boot."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
-        allow=(
-            FilterRule(
-                reason="Default DiagTrack listener",
-                value_matches=r"Diagtrack-Listener\.etl",
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SYSTEM\{controlset}\Control\WMI\Autologger\DiagTrack-Listener",
@@ -309,6 +289,8 @@ class DiagTrackListenerDll(PersistencePlugin):
 
 @register_plugin
 class RdpTestDvcPlugin(PersistencePlugin):
+    """Detects RDP TestDVCPlugin DLL persistence entries."""
+
     definition = CheckDefinition(
         id="rdp_test_dvc_plugin",
         technique="RDP TestDVCPlugin DLL",
@@ -331,6 +313,8 @@ class RdpTestDvcPlugin(PersistencePlugin):
 
 @register_plugin
 class SearchIndexerDll(PersistencePlugin):
+    """Detects Search Indexer DLL Override persistence entries."""
+
     definition = CheckDefinition(
         id="search_indexer_dll",
         technique="Search Indexer DLL Override",
@@ -353,6 +337,8 @@ class SearchIndexerDll(PersistencePlugin):
 
 @register_plugin
 class WuServiceStartupDll(PersistencePlugin):
+    """Detects Windows Update Service Startup DLL persistence entries."""
+
     definition = CheckDefinition(
         id="wu_service_startup_dll",
         technique="Windows Update Service Startup DLL",
@@ -363,13 +349,6 @@ class WuServiceStartupDll(PersistencePlugin):
             "persistence triggered by Windows Update operations."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
-        allow=(
-            FilterRule(
-                reason="Default Windows Update DLL",
-                value_matches=r"wuaueng\.dll$",
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SYSTEM\{controlset}\Services\wuauserv\Parameters",
@@ -382,6 +361,8 @@ class WuServiceStartupDll(PersistencePlugin):
 
 @register_plugin
 class KnownManagedDebuggingDlls(PersistencePlugin):
+    """Detects Known Managed Debugging DLLs persistence entries."""
+
     definition = CheckDefinition(
         id="known_managed_debugging_dlls",
         technique="Known Managed Debugging DLLs",
@@ -404,45 +385,45 @@ class KnownManagedDebuggingDlls(PersistencePlugin):
 
 @register_plugin
 class MiniDumpAuxiliaryDlls(PersistencePlugin):
+    """Detects MiniDump Auxiliary DLLs persistence entries."""
+
     definition = CheckDefinition(
         id="minidump_auxiliary_dlls",
         technique="MiniDump Auxiliary DLLs",
         mitre_id="T1574.001",
         description=(
-            "MiniDumpAuxiliaryDlls are loaded during crash dump generation. "
-            "Registering a DLL here provides code execution whenever a "
-            "process crash dump is created."
+            "MiniDumpAuxiliaryDlls entries name a trigger module and the "
+            "auxiliary DLL dbghelp loads into the dumping process when that "
+            "module is present. The auxiliary DLL runs during every crash "
+            "dump, so registering one here provides code execution."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
-        allow=(
-            FilterRule(
-                reason="Default minidump auxiliary DLL",
-                value_matches=r"(clr|mscorwks|Chakra|jscript9|mrt100)\.dll$",
-                signer="Microsoft",
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
-        """Report DLL paths registered as value names under MiniDumpAuxiliaryDlls."""
+        """Report the auxiliary DLL each MiniDumpAuxiliaryDlls entry loads."""
         findings: list[Finding] = []
 
-        key_path = (
-            r"Microsoft\Windows NT"
-            r"\CurrentVersion\MiniDumpAuxiliaryDlls"
-        )
-        tree = self.hive_ops.load_subtree("SOFTWARE", key_path)
+        key_path = r"Microsoft\Windows NT\CurrentVersion\MiniDumpAuxiliaryDlls"
+        tree = self.context.load_subtree("SOFTWARE", key_path)
         if tree is None:
             return findings
 
-        for name, _val in tree.values():
-            if not name.strip():
+        for trigger_module, auxiliary_dll in tree.values():
+            if not trigger_module.strip():
+                continue
+            auxiliary_dll_path = registry_value_to_str(auxiliary_dll)
+            if auxiliary_dll_path is None:
                 continue
             findings.append(
                 self._make_finding(
-                    path=f"HKLM\\SOFTWARE\\{key_path}\\{name}",
-                    value=name,
+                    path=f"HKLM\\SOFTWARE\\{key_path}\\{trigger_module}",
+                    value=auxiliary_dll_path,
                     access=AccessLevel.SYSTEM,
+                    description=(
+                        f"{self.definition.description} "
+                        f"(trigger module: {trigger_module})"
+                    ),
                 )
             )
 
@@ -451,21 +432,34 @@ class MiniDumpAuxiliaryDlls(PersistencePlugin):
 
 @register_plugin
 class Mapi32DllPath(PersistencePlugin):
+    """Detects MAPI32 DLL Path Override persistence entries."""
+
     definition = CheckDefinition(
         id="mapi32_dll_path",
         technique="MAPI32 DLL Path Override",
         mitre_id="T1574.001",
         description=(
-            "The MAPI32 DLLPath value specifies the DLL loaded by the "
-            "Messaging API. Hijacking this provides code execution in any "
-            "process that uses MAPI for email operations."
+            "Every mail client registers its MAPI provider in a subkey of "
+            "Clients Mail, where DLLPathEx (or the legacy DLLPath) names "
+            "the DLL loaded by every process that initialises MAPI. "
+            "Hijacking it provides code execution in Outlook and in any "
+            "application that sends mail."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
         targets=(
             RegistryTarget(
                 path=r"SOFTWARE\Clients\Mail",
+                values="DLLPathEx",
+                scope=HiveScope.HKLM,
+                recurse=True,
+                include_wow64=True,
+            ),
+            RegistryTarget(
+                path=r"SOFTWARE\Clients\Mail",
                 values="DLLPath",
                 scope=HiveScope.HKLM,
+                recurse=True,
+                include_wow64=True,
             ),
         ),
     )
@@ -473,6 +467,8 @@ class Mapi32DllPath(PersistencePlugin):
 
 @register_plugin
 class GpExtensionDlls(PersistencePlugin):
+    """Detects Group Policy Extension DLLs persistence entries."""
+
     definition = CheckDefinition(
         id="gp_extension_dlls",
         technique="Group Policy Extension DLLs",
@@ -483,24 +479,6 @@ class GpExtensionDlls(PersistencePlugin):
             "SYSTEM-level persistence triggered at every gpupdate cycle."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
-        allow=(
-            FilterRule(
-                reason="Built-in GP extension",
-                value_matches=r"\\system32\\",
-                signer="Microsoft",
-                not_lolbin=True,
-            ),
-            FilterRule(
-                reason="Built-in GP extension DLL",
-                value_matches=(
-                    r"^(gptext|scecli|appmgmts|fdeploy|auditcse"
-                    r"|dmenrollengine|pwlauncher|dggpext|dot3gpclnt"
-                    r"|wlgpclnt|AppManagementConfiguration"
-                    r"|WorkFoldersGPExt)\.dll$"
-                ),
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=(
@@ -517,26 +495,34 @@ class GpExtensionDlls(PersistencePlugin):
 
 @register_plugin
 class WinsockAutoProxy(PersistencePlugin):
+    """Detects Winsock AutoProxy DLL persistence entries."""
+
     definition = CheckDefinition(
         id="winsock_auto_proxy",
         technique="Winsock AutoProxy DLL",
         mitre_id="T1574.001",
         description=(
             "Winsock NameSpace_Catalog5 provider DLLs are loaded for "
-            "network name resolution. A non-OS library in the catalog "
-            "provides persistent DLL loading in any networking process."
+            "network name resolution. A non-OS library in either the "
+            "32-bit or the 64-bit catalog provides persistent DLL loading "
+            "in any networking process."
         ),
         references=("https://attack.mitre.org/techniques/T1574/001/",),
-        allow=(
-            FilterRule(
-                reason="Default Winsock provider",
-                value_matches=r"(mswsock|napinsp|nlansp_c|winrnr|wshbth)\.dll$",
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
-                path=r"SYSTEM\{controlset}\Services\WinSock2\Parameters\NameSpace_Catalog5\Catalog_Entries",
+                path=(
+                    r"SYSTEM\{controlset}\Services\WinSock2\Parameters"
+                    r"\NameSpace_Catalog5\Catalog_Entries"
+                ),
+                values="LibraryPath",
+                scope=HiveScope.HKLM,
+                recurse=True,
+            ),
+            RegistryTarget(
+                path=(
+                    r"SYSTEM\{controlset}\Services\WinSock2\Parameters"
+                    r"\NameSpace_Catalog5\Catalog_Entries64"
+                ),
                 values="LibraryPath",
                 scope=HiveScope.HKLM,
                 recurse=True,

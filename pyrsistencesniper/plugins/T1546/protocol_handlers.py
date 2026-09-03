@@ -1,3 +1,5 @@
+"""Detection for Protocol Handler Hijacking and Search Protocol Handler Hijack."""
+
 from __future__ import annotations
 
 import logging
@@ -5,14 +7,13 @@ import logging
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
     Finding,
     HiveProtocol,
     HiveScope,
     KeyProtocol,
     RegistryTarget,
 )
-from pyrsistencesniper.core.registry import registry_value_to_str
+from pyrsistencesniper.core.registry import registry_key_join, registry_value_to_str
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
@@ -29,52 +30,45 @@ _KNOWN_PROTOCOLS: tuple[str, ...] = (
 
 @register_plugin
 class ProtocolHandlerHijack(PersistencePlugin):
+    """Detects Protocol Handler Hijacking persistence entries."""
+
     definition = CheckDefinition(
         id="protocol_handler_hijack",
         technique="Protocol Handler Hijacking",
         mitre_id="T1546.001",
         description=(
             "Protocol handler commands specify the executable invoked "
-            "when a protocol URI is opened. Known high-risk protocols "
-            "and all custom-registered protocol handlers with URL Protocol "
-            "values are checked."
+            "when a protocol URI is opened. Known high-risk protocols, "
+            "custom-registered protocol handlers carrying a URL Protocol "
+            "value, and per-user class keys that shadow a machine-registered "
+            "protocol without carrying that value are checked."
         ),
         references=("https://attack.mitre.org/techniques/T1546/001/",),
-        allow=(
-            FilterRule(
-                reason="Default ms-msdt handler",
-                value_matches=r"msdt\.exe",
-                signer="Microsoft",
-            ),
-            FilterRule(
-                reason="Default Windows protocol handler",
-                signer="Microsoft",
-                not_lolbin=True,
-            ),
-            FilterRule(
-                reason="Default Windows Explorer protocol handler",
-                value_matches=r"explorer\.exe",
-                signer="Microsoft",
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
+        """Report the open command of every protocol handler worth inspecting."""
         findings: list[Finding] = []
+        machine_protocols: frozenset[str] = frozenset()
 
-        hive = self.hive_ops.open_hive("SOFTWARE")
+        hive = self.context.open_hive_by_name("SOFTWARE")
         if hive is not None:
-            self._scan_hive(
-                hive, "Classes", "HKLM\\SOFTWARE", AccessLevel.SYSTEM, findings
+            machine_protocols = self._scan_hive(
+                hive,
+                "Classes",
+                "HKLM\\SOFTWARE\\Classes",
+                AccessLevel.SYSTEM,
+                findings,
             )
 
-        for profile, uhive in self.hive_ops.iter_usrclass_hives():
+        for profile, uhive in self.context.iter_usrclass_hives():
             self._scan_hive(
                 uhive,
-                "Software\\Classes",
-                f"HKU\\{profile.username}",
+                "",
+                f"HKU\\{profile.username}\\Software\\Classes",
                 AccessLevel.USER,
                 findings,
+                shadowed_protocols=machine_protocols,
             )
 
         return findings
@@ -82,38 +76,41 @@ class ProtocolHandlerHijack(PersistencePlugin):
     def _scan_hive(
         self,
         hive: HiveProtocol,
-        classes_prefix: str,
-        path_prefix: str,
+        lookup_prefix: str,
+        display_prefix: str,
         access: AccessLevel,
         findings: list[Finding],
-    ) -> None:
+        *,
+        shadowed_protocols: frozenset[str] = frozenset(),
+    ) -> frozenset[str]:
+        """Scan one hive's class registrations and report the protocols it registers."""
         known_lower = {protocol.lower() for protocol in _KNOWN_PROTOCOLS}
 
-        # Check known protocols explicitly
         for protocol in _KNOWN_PROTOCOLS:
-            cmd_path = f"{classes_prefix}\\{protocol}\\shell\\open\\command"
-            self._check_command(hive, cmd_path, path_prefix, access, findings)
+            self._check_command(
+                hive, lookup_prefix, display_prefix, protocol, access, findings
+            )
 
-        # Dynamic scan: enumerate protocol handlers via raw pyregf
         try:
-            classes_key = hive.get_key_by_path(classes_prefix.replace("/", "\\"))
+            classes_key = hive.get_key_by_path(lookup_prefix.replace("/", "\\"))
         except Exception:
             logger.debug(
                 "Could not enumerate %s for protocol scan",
-                classes_prefix,
+                display_prefix,
                 exc_info=True,
             )
-            return
+            return frozenset()
         if classes_key is None:
-            return
+            return frozenset()
 
-        self._scan_custom_protocols(
+        return self._scan_custom_protocols(
             hive,
             classes_key,
-            classes_prefix,
-            path_prefix,
+            lookup_prefix,
+            display_prefix,
             access,
             known_lower,
+            shadowed_protocols,
             findings,
         )
 
@@ -121,12 +118,15 @@ class ProtocolHandlerHijack(PersistencePlugin):
         self,
         hive: HiveProtocol,
         classes_key: KeyProtocol,
-        classes_prefix: str,
-        path_prefix: str,
+        lookup_prefix: str,
+        display_prefix: str,
         access: AccessLevel,
         known_lower: set[str],
+        shadowed_protocols: frozenset[str],
         findings: list[Finding],
-    ) -> None:
+    ) -> frozenset[str]:
+        """Check every qualifying class key and return the ones marked URL Protocol."""
+        registered: set[str] = set()
         for index in range(classes_key.get_number_of_sub_keys()):
             try:
                 sub_key = classes_key.get_sub_key(index)
@@ -134,39 +134,66 @@ class ProtocolHandlerHijack(PersistencePlugin):
             except Exception:
                 logger.debug("Failed to read sub key %d", index, exc_info=True)
                 continue
-            if protocol_name.lower() in known_lower:
+            name_lower = protocol_name.lower()
+            if self._has_url_protocol(sub_key, protocol_name):
+                registered.add(name_lower)
+            elif name_lower not in shadowed_protocols:
                 continue
-            if not self._has_url_protocol(sub_key, protocol_name):
+            if name_lower in known_lower:
                 continue
-            cmd_path = f"{classes_prefix}\\{protocol_name}\\shell\\open\\command"
-            self._check_command(hive, cmd_path, path_prefix, access, findings)
+            self._check_command(
+                hive, lookup_prefix, display_prefix, protocol_name, access, findings
+            )
+        return frozenset(registered)
 
     @staticmethod
     def _has_url_protocol(sub_key: KeyProtocol, protocol_name: str) -> bool:
+        """Report whether a class key carries the URL Protocol marker value."""
         try:
-            for val_idx in range(sub_key.get_number_of_values()):
-                if sub_key.get_value(val_idx).get_name().lower() == "url protocol":
-                    return True
+            value_count = sub_key.get_number_of_values()
         except Exception:
-            logger.debug("Failed to read value on key %s", protocol_name, exc_info=True)
+            logger.debug(
+                "Failed to read values on key %s", protocol_name, exc_info=True
+            )
+            return False
+        for value_index in range(value_count):
+            try:
+                value = sub_key.get_value(value_index)
+                # get_name() is None for the unnamed default value
+                name = value.get_name() if value is not None else None
+            except Exception:
+                logger.debug(
+                    "Failed to read value %d on key %s",
+                    value_index,
+                    protocol_name,
+                    exc_info=True,
+                )
+                continue
+            if name is not None and name.lower() == "url protocol":
+                return True
         return False
 
     def _check_command(
         self,
         hive: HiveProtocol,
-        cmd_path: str,
-        path_prefix: str,
+        lookup_prefix: str,
+        display_prefix: str,
+        protocol: str,
         access: AccessLevel,
         findings: list[Finding],
     ) -> None:
-        node = self.registry.load_subtree(hive, cmd_path)
+        """Record the open command one protocol registers, if it registers one."""
+        suffix = (protocol, "shell", "open", "command")
+        node = self.registry.load_subtree(
+            hive, registry_key_join(lookup_prefix, *suffix)
+        )
         if node is None:
             return
         value_str = registry_value_to_str(node.get("(Default)"))
         if value_str is not None:
             findings.append(
                 self._make_finding(
-                    path=f"{path_prefix}\\{cmd_path}",
+                    path=registry_key_join(display_prefix, *suffix),
                     value=value_str,
                     access=access,
                 )
@@ -175,6 +202,8 @@ class ProtocolHandlerHijack(PersistencePlugin):
 
 @register_plugin
 class SearchProtocolHandler(PersistencePlugin):
+    """Detects Search Protocol Handler Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="search_protocol_handler",
         technique="Search Protocol Handler Hijack",
@@ -196,13 +225,6 @@ class SearchProtocolHandler(PersistencePlugin):
                 path=r"Software\Classes\search-ms\shell\open\command",
                 values="(Default)",
                 scope=HiveScope.HKU,
-            ),
-        ),
-        allow=(
-            FilterRule(
-                reason="Default Windows search handler",
-                value_matches=r"Explorer\.exe",
-                signer="Microsoft",
             ),
         ),
     )

@@ -1,3 +1,5 @@
+"""Detection for TypeLib COM Hijacking."""
+
 from __future__ import annotations
 
 import re
@@ -5,77 +7,88 @@ import re
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
     Finding,
 )
-from pyrsistencesniper.core.registry import registry_value_to_str
+from pyrsistencesniper.core.registry import RegistryNode, registry_value_to_str
+from pyrsistencesniper.core.windows import expand_env_vars
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
 _SCRIPT_MONIKER_RE = re.compile(r"^script:", re.IGNORECASE)
-_SAFE_PATH_RE = re.compile(
-    r"(\\system32\\|\\syswow64\\|\\program files\\|\\program files \(x86\)\\)",
-    re.IGNORECASE,
-)
+_RESOURCE_INDEX_RE = re.compile(r"\\\d+$")
+_PLATFORMS: tuple[str, ...] = ("win32", "win64")
+
+
+def _library_file(registered_value: str, username: str) -> str:
+    """Return the file a TypeLib registration points at, ready to look up on disk."""
+    if _SCRIPT_MONIKER_RE.match(registered_value):
+        return ""
+    return expand_env_vars(_RESOURCE_INDEX_RE.sub("", registered_value), username)
 
 
 @register_plugin
 class TypeLibHijack(PersistencePlugin):
+    """Detects TypeLib COM Hijacking persistence entries."""
+
     definition = CheckDefinition(
         id="typelib_hijack",
         technique="TypeLib COM Hijacking",
         mitre_id="T1546.015",
         description=(
             "TypeLib entries in per-user hives (HKCU\\Software\\Classes\\"
-            "TypeLib) are checked for suspicious paths. HKCU TypeLib "
-            "entries override HKLM, allowing user-level persistence. "
-            "Entries using script: monikers or pointing to user-writable "
-            "locations are flagged."
+            "TypeLib) are reported. HKCU TypeLib entries override HKLM, "
+            "allowing user-level persistence, so every registered library "
+            "path is surfaced: a hijack that names a system directory is "
+            "still a hijack, and known-good publishers are suppressed by "
+            "the detection profile rather than here."
         ),
         references=("https://attack.mitre.org/techniques/T1546/015/",),
-        allow=(
-            FilterRule(
-                reason="Standard system type library",
-                path_matches=r"\\(system32|syswow64|Program Files)",
-                signer="Microsoft",
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
+        """Scan each user's class registrations for hijacked TypeLib entries."""
         findings: list[Finding] = []
 
-        for profile, hive in self.hive_ops.iter_usrclass_hives():
-            typelib_tree = self.registry.load_subtree(hive, r"Software\Classes\TypeLib")
+        for profile, hive in self.context.iter_usrclass_hives():
+            typelib_tree = self.registry.load_subtree(hive, "TypeLib")
             if typelib_tree is None:
                 continue
 
             for guid, guid_node in typelib_tree.children():
-                for version, ver_node in guid_node.children():
-                    for platform in ("win32", "win64"):
-                        zero_node = ver_node.child("0")
-                        if zero_node is None:
-                            continue
-                        plat_node = zero_node.child(platform)
-                        if plat_node is None:
-                            continue
-                        path_val = registry_value_to_str(plat_node.get("(Default)"))
-                        if path_val is None:
-                            continue
-                        if _SCRIPT_MONIKER_RE.match(
-                            path_val
-                        ) or not _SAFE_PATH_RE.search(path_val):
-                            findings.append(
-                                self._make_finding(
-                                    path=(
-                                        f"HKU\\{profile.username}"
-                                        f"\\Software\\Classes\\TypeLib"
-                                        f"\\{guid}\\{version}\\0"
-                                        f"\\{platform}"
-                                    ),
-                                    value=path_val,
-                                    access=AccessLevel.USER,
-                                )
-                            )
+                for version, version_node in guid_node.children():
+                    self._collect_version(
+                        profile.username, guid, version, version_node, findings
+                    )
 
         return findings
+
+    def _collect_version(
+        self,
+        username: str,
+        guid: str,
+        version: str,
+        version_node: RegistryNode,
+        findings: list[Finding],
+    ) -> None:
+        """Report every platform library registered under one TypeLib version."""
+        for lcid, lcid_node in version_node.children():
+            for platform in _PLATFORMS:
+                platform_node = lcid_node.child(platform)
+                if platform_node is None:
+                    continue
+                registered = registry_value_to_str(platform_node.get("(Default)"))
+                if registered is None:
+                    continue
+                findings.append(
+                    self._make_finding(
+                        path=(
+                            f"HKU\\{username}"
+                            f"\\Software\\Classes\\TypeLib"
+                            f"\\{guid}\\{version}\\{lcid}"
+                            f"\\{platform}"
+                        ),
+                        value=registered,
+                        access=AccessLevel.USER,
+                        resolve_target=_library_file(registered, username),
+                    )
+                )

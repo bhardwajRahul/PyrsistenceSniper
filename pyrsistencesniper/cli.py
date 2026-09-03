@@ -1,3 +1,5 @@
+"""Command line entry point: argument parsing, logging, and scan dispatch."""
+
 from __future__ import annotations
 
 import argparse
@@ -6,22 +8,36 @@ import sys
 from pathlib import Path
 
 from pyrsistencesniper.core.context import build_context
+from pyrsistencesniper.core.filesystem import reset_skips, skipped_paths
 from pyrsistencesniper.core.log import setup_logging
 from pyrsistencesniper.core.lolbins import download_lolbins
-from pyrsistencesniper.core.models import Severity
-from pyrsistencesniper.core.pipeline import run_all_checks
+from pyrsistencesniper.core.models import CheckFailure, HiveRecord, Severity
 from pyrsistencesniper.core.profile import DetectionProfile
+from pyrsistencesniper.core.registry import (
+    artifact_failures,
+    partial_reads,
+    reset_artifact_failures,
+    reset_partial_reads,
+)
+from pyrsistencesniper.core.windows import _io_path
+from pyrsistencesniper.detection.pipeline import (
+    failed_checks,
+    reset_failures,
+    run_pipeline,
+)
 from pyrsistencesniper.output import get_renderer
-from pyrsistencesniper.plugins import _PLUGIN_REGISTRY, _discover_plugins
+from pyrsistencesniper.plugins import (
+    _PLUGIN_REGISTRY,
+    _discover_plugins,
+    reset_import_failures,
+)
 from pyrsistencesniper.ui.banner import print_banner
 from pyrsistencesniper.ui.progress import make_progress_bar
 
-_SEVERITY_MAP = {
-    "info": Severity.INFO,
-    "low": Severity.LOW,
-    "medium": Severity.MEDIUM,
-    "high": Severity.HIGH,
-}
+_SEVERITY_CHOICES = tuple(level.name.lower() for level in Severity)
+
+# Cap the skipped-path list so a long one cannot bury the report.
+_MAX_SKIPPED_SHOWN = 5
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,9 +96,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--min-severity",
-        choices=["info", "low", "medium", "high"],
+        choices=_SEVERITY_CHOICES,
         default="medium",
         help="Minimum severity to include in output (default: medium)",
+    )
+    parser.add_argument(
+        "--mft",
+        type=Path,
+        default=None,
+        help=(
+            "Externally collected $MFT file for change timestamps "
+            "(default: auto-discover inside the image root)"
+        ),
+    )
+    parser.add_argument(
+        "--no-timeline",
+        action="store_true",
+        help="Skip last-change timestamp resolution",
     )
     parser.add_argument(
         "-v",
@@ -109,13 +139,25 @@ def main() -> None:
         return
 
     if args.update_lolbins:
-        download_lolbins()
+        try:
+            download_lolbins()
+        except Exception as exc:
+            _fail(logging.getLogger(__name__), exc)
         return
 
     if not args.path:
         parser.error("the following arguments are required: path")
 
     _run_scan(args)
+
+
+def _fail(logger: logging.Logger, exc: Exception) -> None:
+    """Report a fatal error on stderr and exit non-zero."""
+    logger.debug("Fatal error details:", exc_info=True)
+    sys.stderr.write(f"Error: {exc}\n")
+    if not logger.isEnabledFor(logging.DEBUG):
+        sys.stderr.write("Re-run with -v for a full traceback.\n")
+    sys.exit(1)
 
 
 def _run_scan(args: argparse.Namespace) -> None:
@@ -126,28 +168,104 @@ def _run_scan(args: argparse.Namespace) -> None:
         sys.stderr.write("Error: XLSX format requires --output <file>\n")
         sys.exit(1)
 
+    if args.mft is not None and args.no_timeline:
+        sys.stderr.write("Error: --mft cannot be combined with --no-timeline\n")
+        sys.exit(1)
+
+    if args.mft is not None and not _io_path(args.mft).is_file():
+        sys.stderr.write(f"Error: $MFT file does not exist: {args.mft}\n")
+        sys.exit(1)
+
     try:
         profile = DetectionProfile.load(args.profile)
-        ctx = build_context(args.path, hostname=args.hostname, profile=profile)
+        reset_skips()
+        reset_failures()
+        reset_import_failures()
+        reset_partial_reads()
+        reset_artifact_failures()
+        context = build_context(args.path, hostname=args.hostname)
 
         progress_bar, on_progress = make_progress_bar()
         with progress_bar:
-            results = run_all_checks(
-                ctx,
+            results = run_pipeline(
+                context,
+                profile=profile,
                 technique_filter=tuple(args.technique),
-                min_severity=_SEVERITY_MAP[args.min_severity],
+                min_severity=Severity[args.min_severity.upper()],
+                mft_path=args.mft,
+                timeline=not args.no_timeline,
                 progress=on_progress,
             )
 
+        inventory = context.hive_inventory()
+        failures = failed_checks() + _partial_read_failures() + artifact_failures()
         renderer_cls = get_renderer(args.format)
         renderer = renderer_cls()
-        renderer.render(results, output=args.output)
+        renderer.render(
+            results,
+            output=args.output,
+            inventory=inventory,
+            failures=failures,
+        )
     except KeyboardInterrupt:
         sys.exit(130)
     except Exception as exc:
-        logger.debug("Fatal error details:", exc_info=True)
-        sys.stderr.write(f"Error: {exc}\n")
-        sys.exit(1)
+        _fail(logger, exc)
+
+    _warn_on_skipped_paths()
+    _exit_on_incomplete_scan(inventory, failures)
+
+
+def _warn_on_skipped_paths() -> None:
+    """Name paths the scan could not read, so an empty report is not read as clean."""
+    skipped = skipped_paths()
+    if not skipped:
+        return
+    shown = sorted(skipped)[:_MAX_SKIPPED_SHOWN]
+    hidden = len(skipped) - _MAX_SKIPPED_SHOWN
+    more = f" (+{hidden} more)" if hidden > 0 else ""
+    sys.stderr.write(
+        f"Warning: {len(skipped)} path(s) could not be read and were "
+        f"skipped: {', '.join(shown)}{more}\n"
+    )
+
+
+def _partial_read_failures() -> tuple[CheckFailure, ...]:
+    """Report partially-read registry keys as coverage the scan did not get."""
+    return tuple(
+        CheckFailure(check_id=f"registry key {key_name}", error=error)
+        for key_name, error in sorted(partial_reads().items())
+    )
+
+
+def _exit_on_incomplete_scan(
+    inventory: tuple[HiveRecord, ...],
+    failures: tuple[CheckFailure, ...],
+) -> None:
+    """Exit non-zero when a hive, a check or an artifact produced nothing."""
+    unreadable = [record for record in inventory if record.cost_checks]
+    incomplete = False
+
+    if unreadable:
+        incomplete = True
+        names = ", ".join(
+            f"{record.name} [{record.owner}]" if record.owner else record.name
+            for record in unreadable
+        )
+        sys.stderr.write(
+            f"Scan incomplete: {len(unreadable)} hive(s) could not be read: {names}\n"
+        )
+
+    if failures:
+        incomplete = True
+        names = ", ".join(failure.check_id for failure in failures)
+        sys.stderr.write(
+            f"Scan incomplete: {len(failures)} check(s) or artifact(s) "
+            f"produced nothing: {names}\n"
+        )
+
+    if incomplete:
+        sys.exit(2)
 
 
 def _list_checks() -> None:
@@ -157,5 +275,7 @@ def _list_checks() -> None:
         sys.stdout.write("No checks registered.\n")
         return
     for _check_id, plugin_cls in sorted(_PLUGIN_REGISTRY.items()):
-        defn = plugin_cls.definition
-        sys.stdout.write(f"{defn.id:<30s} [{defn.mitre_id}] {defn.technique}\n")
+        definition = plugin_cls.definition
+        sys.stdout.write(
+            f"{definition.id:<30s} [{definition.mitre_id}] {definition.technique}\n"
+        )

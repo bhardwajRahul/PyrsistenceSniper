@@ -1,3 +1,5 @@
+"""Detection for NL6 ContentIndex DLL Override."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
@@ -14,6 +16,8 @@ _CONTENT_INDEX_LANG_PATH_TEMPLATE = r"{controlset}\Control\ContentIndex\Language
 
 @register_plugin
 class ContentIndexDll(PersistencePlugin):
+    """Detects NL6 ContentIndex DLL Override persistence entries."""
+
     definition = CheckDefinition(
         id="content_index_dll",
         technique="NL6 ContentIndex DLL Override",
@@ -28,12 +32,13 @@ class ContentIndexDll(PersistencePlugin):
     )
 
     def run(self) -> list[Finding]:
+        """Report every ContentIndex language that overrides its NL6 DLL."""
         findings: list[Finding] = []
 
         lang_path = _CONTENT_INDEX_LANG_PATH_TEMPLATE.replace(
             "{controlset}", self.context.active_controlset
         )
-        tree = self.hive_ops.load_subtree("SYSTEM", lang_path)
+        tree = self.context.load_subtree("SYSTEM", lang_path)
         if tree is None:
             return findings
 

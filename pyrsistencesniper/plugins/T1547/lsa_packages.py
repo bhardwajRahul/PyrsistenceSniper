@@ -1,8 +1,9 @@
+"""Detections for the LSA package registrations and protection flags."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     CheckDefinition,
-    FilterRule,
     HiveScope,
     RegistryTarget,
 )
@@ -12,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class AuthenticationPackages(PersistencePlugin):
+    """Detects Authentication Packages persistence entries."""
+
     definition = CheckDefinition(
         id="authentication_packages",
         technique="Authentication Packages",
@@ -22,7 +25,6 @@ class AuthenticationPackages(PersistencePlugin):
             "credentials or provide boot-level persistence."
         ),
         references=("https://attack.mitre.org/techniques/T1547/002/",),
-        allow=(FilterRule(reason="Default auth package", value_matches=r"^msv1_0$"),),
         targets=(
             RegistryTarget(
                 path=r"SYSTEM\{controlset}\Control\Lsa",
@@ -35,6 +37,8 @@ class AuthenticationPackages(PersistencePlugin):
 
 @register_plugin
 class SecurityPackages(PersistencePlugin):
+    """Detects Security Packages persistence entries."""
+
     definition = CheckDefinition(
         id="security_packages",
         technique="Security Packages",
@@ -45,12 +49,6 @@ class SecurityPackages(PersistencePlugin):
             "credentials for every interactive logon."
         ),
         references=("https://attack.mitre.org/techniques/T1547/005/",),
-        allow=(
-            FilterRule(
-                reason="Default Windows SSP",
-                value_matches=r"^(kerberos|msv1_0|schannel|wdigest|tspkg|pku2u|cloudap)$",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SYSTEM\{controlset}\Control\Lsa",
@@ -63,6 +61,8 @@ class SecurityPackages(PersistencePlugin):
 
 @register_plugin
 class LsaRunAsPPL(PersistencePlugin):
+    """Detects LSASS PPL Protection Status persistence entries."""
+
     definition = CheckDefinition(
         id="lsa_run_as_ppl",
         technique="LSASS PPL Protection Status",
@@ -80,17 +80,13 @@ class LsaRunAsPPL(PersistencePlugin):
                 scope=HiveScope.HKLM,
             ),
         ),
-        allow=(
-            FilterRule(
-                reason="LSA protection enabled",
-                value_matches=r"^[12]$",
-            ),
-        ),
     )
 
 
 @register_plugin
 class LsaCfgFlags(PersistencePlugin):
+    """Detects Credential Guard Configuration persistence entries."""
+
     definition = CheckDefinition(
         id="lsa_cfg_flags",
         technique="Credential Guard Configuration",
@@ -106,12 +102,6 @@ class LsaCfgFlags(PersistencePlugin):
                 path=r"SYSTEM\{controlset}\Control\Lsa",
                 values="LsaCfgFlags",
                 scope=HiveScope.HKLM,
-            ),
-        ),
-        allow=(
-            FilterRule(
-                reason="Credential Guard enabled",
-                value_matches=r"^[12]$",
             ),
         ),
     )

@@ -1,8 +1,9 @@
+"""Detections for the programs and DLLs Windows runs before user logon."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     CheckDefinition,
-    FilterRule,
     HiveScope,
     RegistryTarget,
 )
@@ -12,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class BootExecute(PersistencePlugin):
+    """Detects Boot Execute persistence entries."""
+
     definition = CheckDefinition(
         id="boot_execute",
         technique="Boot Execute",
@@ -30,17 +33,13 @@ class BootExecute(PersistencePlugin):
                 scope=HiveScope.HKLM,
             ),
         ),
-        allow=(
-            FilterRule(
-                reason="Default Windows boot-time disk check",
-                value_matches=r"^autocheck\s+autochk",
-            ),
-        ),
     )
 
 
 @register_plugin
 class SetupExecute(PersistencePlugin):
+    """Detects Setup Execute persistence entries."""
+
     definition = CheckDefinition(
         id="setup_execute",
         technique="Setup Execute",
@@ -63,6 +62,8 @@ class SetupExecute(PersistencePlugin):
 
 @register_plugin
 class PlatformExecute(PersistencePlugin):
+    """Detects Platform Execute persistence entries."""
+
     definition = CheckDefinition(
         id="platform_execute",
         technique="Platform Execute",
@@ -85,6 +86,8 @@ class PlatformExecute(PersistencePlugin):
 
 @register_plugin
 class SessionManagerExecute(PersistencePlugin):
+    """Detects Session Manager Execute persistence entries."""
+
     definition = CheckDefinition(
         id="session_manager_execute",
         technique="Session Manager Execute",
@@ -107,6 +110,8 @@ class SessionManagerExecute(PersistencePlugin):
 
 @register_plugin
 class S0InitialCommand(PersistencePlugin):
+    """Detects S0 Initial Command persistence entries."""
+
     definition = CheckDefinition(
         id="s0_initial_command",
         technique="S0 Initial Command",
@@ -129,6 +134,8 @@ class S0InitialCommand(PersistencePlugin):
 
 @register_plugin
 class ServiceControlManagerExtension(PersistencePlugin):
+    """Detects Service Control Manager Extension persistence entries."""
+
     definition = CheckDefinition(
         id="scm_extension",
         technique="Service Control Manager Extension",
@@ -149,6 +156,8 @@ class ServiceControlManagerExtension(PersistencePlugin):
 
 @register_plugin
 class SessionManagerSubSystems(PersistencePlugin):
+    """Detects Session Manager SubSystems persistence entries."""
+
     definition = CheckDefinition(
         id="session_manager_subsystems",
         technique="Session Manager SubSystems",
@@ -165,13 +174,6 @@ class SessionManagerSubSystems(PersistencePlugin):
                 path=r"SYSTEM\{controlset}\Control\Session Manager\SubSystems",
                 values="Windows",
                 scope=HiveScope.HKLM,
-            ),
-        ),
-        allow=(
-            FilterRule(
-                reason="Default Windows subsystem configuration",
-                value_matches=r"csrss\.exe",
-                signer="Microsoft",
             ),
         ),
     )

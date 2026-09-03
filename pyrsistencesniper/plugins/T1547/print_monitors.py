@@ -1,8 +1,9 @@
+"""Detections for the DLLs the Print Spooler loads at startup."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     CheckDefinition,
-    FilterRule,
     HiveScope,
     RegistryTarget,
 )
@@ -12,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class PrintMonitors(PersistencePlugin):
+    """Detects Print Monitors persistence entries."""
+
     definition = CheckDefinition(
         id="print_monitors",
         technique="Print Monitors",
@@ -23,16 +26,6 @@ class PrintMonitors(PersistencePlugin):
             "Monitor, WSD Port. Any additional monitor is suspicious."
         ),
         references=("https://attack.mitre.org/techniques/T1547/010/",),
-        allow=(
-            FilterRule(
-                reason="Default Windows print monitor",
-                value_matches=(
-                    r"^(localspl|tcpmon|usbmon|WSDMon|APMon|AppMon|FXSMON"
-                    r"|msonppmon)\.dll$"
-                ),
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SYSTEM\{controlset}\Control\Print\Monitors",
@@ -46,6 +39,8 @@ class PrintMonitors(PersistencePlugin):
 
 @register_plugin
 class PrintProcessors(PersistencePlugin):
+    """Detects Print Processors persistence entries."""
+
     definition = CheckDefinition(
         id="print_processors",
         technique="Print Processors",
@@ -57,13 +52,6 @@ class PrintProcessors(PersistencePlugin):
             "x86 architecture paths are checked."
         ),
         references=("https://attack.mitre.org/techniques/T1547/012/",),
-        allow=(
-            FilterRule(
-                reason="Default Windows print processor",
-                value_matches=r"^winprint\.dll$",
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=(

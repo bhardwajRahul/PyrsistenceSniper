@@ -1,9 +1,10 @@
+"""Detection for crash-handler and debugger hijacks: AeDebug, WER, .NET, LSM."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     AccessLevel,
     CheckDefinition,
-    FilterRule,
     Finding,
     HiveScope,
     RegistryTarget,
@@ -11,9 +12,17 @@ from pyrsistencesniper.core.models import (
 from pyrsistencesniper.plugins import register_plugin
 from pyrsistencesniper.plugins.base import PersistencePlugin
 
+_WER_HELPER_MODULE_PATHS = (
+    r"Microsoft\Windows\Windows Error Reporting\RuntimeExceptionHelperModules",
+    r"Wow6432Node\Microsoft\Windows\Windows Error Reporting"
+    r"\RuntimeExceptionHelperModules",
+)
+
 
 @register_plugin
 class AeDebug(PersistencePlugin):
+    """Detects AeDebug Debugger Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="ae_debug",
         technique="AeDebug Debugger Hijack",
@@ -30,11 +39,7 @@ class AeDebug(PersistencePlugin):
                 path=r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug",
                 values="Debugger",
                 scope=HiveScope.HKLM,
-            ),
-        ),
-        allow=(
-            FilterRule(
-                reason="Known JIT debugger", value_matches=r"(vsjitdebugger|drwtsn32)"
+                include_wow64=True,
             ),
         ),
     )
@@ -42,6 +47,8 @@ class AeDebug(PersistencePlugin):
 
 @register_plugin
 class AeDebugProtected(PersistencePlugin):
+    """Detects AeDebug Protected Process Debugger persistence entries."""
+
     definition = CheckDefinition(
         id="ae_debug_protected",
         technique="AeDebug Protected Process Debugger",
@@ -57,6 +64,7 @@ class AeDebugProtected(PersistencePlugin):
                 path=r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebugProtected",
                 values="Debugger",
                 scope=HiveScope.HKLM,
+                include_wow64=True,
             ),
         ),
     )
@@ -64,6 +72,8 @@ class AeDebugProtected(PersistencePlugin):
 
 @register_plugin
 class WerDebugger(PersistencePlugin):
+    """Detects WER Debugger Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="wer_debugger",
         technique="WER Debugger Hijack",
@@ -79,6 +89,7 @@ class WerDebugger(PersistencePlugin):
                 path=r"SOFTWARE\Microsoft\Windows\Windows Error Reporting",
                 values="Debugger",
                 scope=HiveScope.HKLM,
+                include_wow64=True,
             ),
         ),
     )
@@ -86,6 +97,8 @@ class WerDebugger(PersistencePlugin):
 
 @register_plugin
 class WerReflectDebugger(PersistencePlugin):
+    """Detects WER ReflectDebugger Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="wer_reflect_debugger",
         technique="WER ReflectDebugger Hijack",
@@ -101,6 +114,7 @@ class WerReflectDebugger(PersistencePlugin):
                 path=r"SOFTWARE\Microsoft\Windows\Windows Error Reporting",
                 values="ReflectDebugger",
                 scope=HiveScope.HKLM,
+                include_wow64=True,
             ),
         ),
     )
@@ -108,6 +122,8 @@ class WerReflectDebugger(PersistencePlugin):
 
 @register_plugin
 class WerHangs(PersistencePlugin):
+    """Detects WER Hangs Debugger Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="wer_hangs",
         technique="WER Hangs Debugger Hijack",
@@ -123,6 +139,7 @@ class WerHangs(PersistencePlugin):
                 path=r"SOFTWARE\Microsoft\Windows\Windows Error Reporting\Hangs",
                 values="Debugger",
                 scope=HiveScope.HKLM,
+                include_wow64=True,
             ),
         ),
     )
@@ -130,6 +147,8 @@ class WerHangs(PersistencePlugin):
 
 @register_plugin
 class WerRuntimeExceptionHelperModules(PersistencePlugin):
+    """Detects WER Runtime Exception Modules persistence entries."""
+
     definition = CheckDefinition(
         id="wer_runtime_exception",
         technique="WER Runtime Exception Modules",
@@ -140,49 +159,35 @@ class WerRuntimeExceptionHelperModules(PersistencePlugin):
             "provides DLL-based persistence via application crashes."
         ),
         references=("https://attack.mitre.org/techniques/T1546/",),
-        allow=(
-            FilterRule(
-                reason="Known WER helper module",
-                value_matches=r"(mscordacwks|iertutil|msiwer|wbiosrvc|msedge_wer)\.dll",
-                signer="Microsoft",
-            ),
-            FilterRule(
-                reason="Google Chrome WER helper",
-                value_matches=r"chrome_wer\.dll",
-                signer="Google",
-            ),
-        ),
     )
 
     def run(self) -> list[Finding]:
-        """Report RuntimeExceptionHelperModules DLL paths."""
+        """Report RuntimeExceptionHelperModules DLL paths from both registry views."""
         findings: list[Finding] = []
 
-        key_path = (
-            r"Microsoft\Windows"
-            r"\Windows Error Reporting"
-            r"\RuntimeExceptionHelperModules"
-        )
-        tree = self.hive_ops.load_subtree("SOFTWARE", key_path)
-        if tree is None:
-            return findings
-
-        for name, _val in tree.values():
-            if not name.strip():
+        for key_path in _WER_HELPER_MODULE_PATHS:
+            tree = self.context.load_subtree("SOFTWARE", key_path)
+            if tree is None:
                 continue
-            findings.append(
-                self._make_finding(
-                    path=f"HKLM\\SOFTWARE\\{key_path}\\{name}",
-                    value=name,
-                    access=AccessLevel.SYSTEM,
+
+            for name, _data in tree.values():
+                if not name.strip():
+                    continue
+                findings.append(
+                    self._make_finding(
+                        path=f"HKLM\\SOFTWARE\\{key_path}\\{name}",
+                        value=name,
+                        access=AccessLevel.SYSTEM,
+                    )
                 )
-            )
 
         return findings
 
 
 @register_plugin
 class DotNetDbgManagedDebugger(PersistencePlugin):
+    """Detects .NET DbgManagedDebugger Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="dotnet_dbg_managed_debugger",
         technique=".NET DbgManagedDebugger Hijack",
@@ -210,6 +215,8 @@ class DotNetDbgManagedDebugger(PersistencePlugin):
 
 @register_plugin
 class LsmDebugger(PersistencePlugin):
+    """Detects LSM Debugger Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="lsm_debugger",
         technique="LSM Debugger Hijack",
@@ -229,6 +236,7 @@ class LsmDebugger(PersistencePlugin):
                 ),
                 values="MonitorProcess",
                 scope=HiveScope.HKLM,
+                include_wow64=True,
             ),
         ),
     )

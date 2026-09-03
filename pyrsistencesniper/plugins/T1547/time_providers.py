@@ -1,8 +1,9 @@
+"""Detection for Time Providers."""
+
 from __future__ import annotations
 
 from pyrsistencesniper.core.models import (
     CheckDefinition,
-    FilterRule,
     HiveScope,
     RegistryTarget,
 )
@@ -12,6 +13,8 @@ from pyrsistencesniper.plugins.base import PersistencePlugin
 
 @register_plugin
 class TimeProviders(PersistencePlugin):
+    """Detects Time Providers persistence entries."""
+
     definition = CheckDefinition(
         id="time_providers",
         technique="Time Providers",
@@ -23,18 +26,6 @@ class TimeProviders(PersistencePlugin):
             "DLL is a strong indicator of persistence."
         ),
         references=("https://attack.mitre.org/techniques/T1547/003/",),
-        allow=(
-            FilterRule(
-                reason="Default Windows time provider",
-                value_matches=r"w32time\.dll$",
-                signer="Microsoft",
-            ),
-            FilterRule(
-                reason="Hyper-V time provider",
-                value_matches=r"vmictimeprovider\.dll$",
-                signer="Microsoft",
-            ),
-        ),
         targets=(
             RegistryTarget(
                 path=r"SYSTEM\{controlset}\Services\W32Time\TimeProviders",

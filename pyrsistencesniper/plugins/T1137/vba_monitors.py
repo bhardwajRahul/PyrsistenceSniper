@@ -1,9 +1,4 @@
-"""Detect VBA monitor DLL hijack persistence.
-
-The VBE7 monitor CLSID InprocServer32 value specifies a DLL loaded whenever
-VBA executes.  Hijacking this COM registration provides persistence across
-all Office macro execution.
-"""
+"""Detect VBA monitor DLL hijack persistence."""
 
 from __future__ import annotations
 
@@ -23,27 +18,30 @@ _VBA_CLSIDS: tuple[str, ...] = (
 
 @register_plugin
 class VbaMonitors(PersistencePlugin):
+    """Detects VBA Monitor DLL Hijack persistence entries."""
+
     definition = CheckDefinition(
         id="vba_monitors",
         technique="VBA Monitor DLL Hijack",
         mitre_id="T1137",
         description=(
-            "Known VBA monitor CLSIDs InprocServer32 values specify DLLs "
-            "loaded whenever VBA executes. Hijacking these COM registrations "
-            "provides persistence across all Office macro execution. Both "
-            "HKLM and per-user hives are checked."
+            "The InprocServer32 value of a known VBA monitor CLSID names a "
+            "DLL loaded whenever VBA executes, so hijacking the COM "
+            "registration runs code on every Office macro. The machine and "
+            "per-user hives are both read."
         ),
         references=("https://attack.mitre.org/techniques/T1137/",),
     )
 
     def run(self) -> list[Finding]:
+        """Report the DLL each VBA monitor CLSID registers, machine and per-user."""
         findings: list[Finding] = []
 
-        hive = self.hive_ops.open_hive("SOFTWARE")
+        hive = self.context.open_hive_by_name("SOFTWARE")
         if hive is not None:
             for clsid in _VBA_CLSIDS:
                 vba_path = f"Classes\\CLSID\\{clsid}\\InprocServer32"
-                value_str = self.hive_ops.resolve_clsid_default(hive, vba_path)
+                value_str = self.context.resolve_clsid_default(hive, vba_path)
                 if value_str.strip():
                     findings.append(
                         self._make_finding(
@@ -53,14 +51,19 @@ class VbaMonitors(PersistencePlugin):
                         )
                     )
 
-        for profile, uhive in self.hive_ops.iter_usrclass_hives():
+        for profile, usrclass_hive in self.context.iter_usrclass_hives():
             for clsid in _VBA_CLSIDS:
-                vba_path = f"Software\\Classes\\CLSID\\{clsid}\\InprocServer32"
-                value_str = self.hive_ops.resolve_clsid_default(uhive, vba_path)
+                lookup_path = f"CLSID\\{clsid}\\InprocServer32"
+                value_str = self.context.resolve_clsid_default(
+                    usrclass_hive, lookup_path
+                )
                 if value_str.strip():
                     findings.append(
                         self._make_finding(
-                            path=f"HKU\\{profile.username}\\{vba_path}",
+                            path=(
+                                f"HKU\\{profile.username}"
+                                f"\\Software\\Classes\\{lookup_path}"
+                            ),
                             value=value_str,
                             access=AccessLevel.USER,
                         )
