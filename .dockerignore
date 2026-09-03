@@ -7,4 +7,3 @@ dist
 .mypy_cache
 .pytest_cache
 .ruff_cache
-poetry.lock

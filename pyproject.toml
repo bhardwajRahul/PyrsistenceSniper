@@ -5,7 +5,7 @@ description = "Offline Windows Persistence Detection"
 authors = [
     {name = "Maurice Fielenbach", email = "info@hexastrike.com"}
 ]
-license = {text = "MIT"}
+license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = [
@@ -22,9 +22,7 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
-    "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",
-    "License :: OSI Approved :: MIT License",
     "Natural Language :: English",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
@@ -36,18 +34,18 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
-    "libregf-python (==20240421)",
-    "pyyaml (==6.0.3)",
-    "jinja2 (==3.1.6)",
-    "lief (==0.17.6)",
-    "asn1crypto (==1.5.1)",
-    "httpx (==0.28.1)",
-    "platformdirs (==4.9.4)",
-    "rich (==14.3.3)",
-    "defusedxml (==0.7.1)",
-    "openpyxl (==3.1.5)"
+    "libregf-python>=20240421",
+    "pyyaml>=6.0,<7.0",
+    "jinja2>=3.1,<4.0",
+    "lief>=0.17,<2.0",
+    "asn1crypto>=1.5,<2.0",
+    "httpx>=0.27,<1.0",
+    "platformdirs>=4.0,<5.0",
+    "rich>=13.7,<16.0",
+    "defusedxml>=0.7,<1.0",
+    "openpyxl>=3.1,<4.0",
+    "python-evtx (>=0.8,<1.0)",
 ]
-
 
 [project.urls]
 Homepage = "https://github.com/Hexastrike/PyrsistenceSniper"
@@ -55,7 +53,7 @@ Repository = "https://github.com/Hexastrike/PyrsistenceSniper"
 Issues = "https://github.com/Hexastrike/PyrsistenceSniper/issues"
 
 [build-system]
-requires = ["poetry-core==2.0.0"]
+requires = ["poetry-core>=2.0,<3.0"]
 build-backend = "poetry.core.masonry.api"
 
 [project.scripts]
@@ -92,12 +90,14 @@ select = [
 ]
 ignore = [
     "PLR0913",  # too many arguments, legitimate for AnalysisContext, plugin constructors
-    "PLC0415",  # import-outside-toplevel, inline imports kept only for circular-import avoidance
-    "S101",     # assert used for internal invariants
+    "PLR0917",  # too many positional arguments, same rationale as PLR0913
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "ANN", "ARG", "PLR2004", "PT019", "N999"]
+"tests/**/*.py" = ["S101", "ANN", "ARG", "PLC0415", "PLR2004", "PT019", "N999"]
+
+[tool.ruff.lint.isort]
+required-imports = ["from __future__ import annotations"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -132,6 +132,10 @@ ignore_missing_imports = true
 module = "openpyxl.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "Evtx.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-markers", "--strict-config", "-ra"]
@@ -152,12 +156,12 @@ fail_under = 80
 
 [dependency-groups]
 dev = [
-    "pytest (==9.0.2)",
-    "pytest-cov (==7.1.0)",
-    "mypy (==1.19.1)",
-    "ruff (==0.15.2)",
-    "types-pyyaml (==6.0.12.20250915)",
-    "pre-commit (==4.5.1)"
+    "pytest>=8.0,<10.0",
+    "pytest-cov>=6.0,<8.0",
+    "mypy>=1.15,<3.0",
+    "ruff>=0.15.2,<0.17",
+    "types-pyyaml>=6.0,<7.0",
+    "pre-commit>=4.0,<5.0",
 ]
 
 [tool.semantic_release]
