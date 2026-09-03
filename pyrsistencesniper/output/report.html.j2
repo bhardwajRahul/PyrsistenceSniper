@@ -5,12 +5,20 @@
 <title>PyrsistenceSniper Report</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-::selection { background: #333; color: #e5e5e5; }
+:root {
+  --accent: #E65064;
+  --accent-soft: #EC7D8C;
+  --sev-high: #FF2E9E;
+  --sev-medium: #FFB224;
+  --sev-low: #3ECF8E;
+  --sev-info: #5CA0FF;
+}
+::selection { background: rgba(230,80,100,0.4); color: #ffffff; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   background-color: #000000; color: #e5e5e5; line-height: 1.5; padding: 1.5rem;
 }
-a { color: #d6336c; text-decoration: none; }
+a { color: var(--accent-soft); text-decoration: none; }
 a:hover { text-decoration: underline; }
 .report-header {
   margin-bottom: 1.5rem;
@@ -20,53 +28,87 @@ a:hover { text-decoration: underline; }
 .brand-name { font-size: 1.6rem; font-weight: 600; color: #e5e5e5; letter-spacing: -0.02em; }
 .brand-tag { font-size: 0.85rem; color: #888888; }
 .report-header .timestamp { color: #888888; font-size: 0.85rem; }
-.stats-bar { display: flex; align-items: baseline; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.25rem 0; }
-.stat-card {
-  display: flex; align-items: baseline; gap: 0.35rem;
-  padding: 0.3rem 1.1rem; background: #111111; border: 1px solid #222; border-radius: 0.4rem;
-}
-.stat-card:first-child { padding-left: 1.1rem; }
+.stats-bar { display: flex; align-items: baseline; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.4rem 1.75rem; }
+.stat-card { display: flex; align-items: baseline; gap: 0.4rem; }
 .stat-card .stat-label { font-size: 0.8rem; color: #888888; order: -1; }
-.stat-card .stat-value { font-size: 0.95rem; font-weight: 600; }
-.stat-total .stat-value { color: #e5e5e5; }
-.stat-high .stat-value { color: #e8366f; }
-.stat-medium .stat-value { color: #f0983e; }
-.stat-low .stat-value { color: #34d399; }
-.stat-info .stat-value { color: #38bdf8; }
+.stat-card .stat-value { font-size: 0.95rem; font-weight: 600; color: #e5e5e5; }
+.scan-integrity {
+  border: 1px solid #7f1d1d; border-left-width: 3px; border-radius: 0.6rem;
+  background: #1a0d0d; padding: 0.75rem 1rem; margin-bottom: 1.25rem;
+}
+.scan-integrity-soft { border-color: #78500f; background: #191203; }
+.scan-integrity-title { font-size: 0.9rem; font-weight: 600; color: #e5e5e5; }
+.scan-integrity-note { font-size: 0.8rem; color: #a1a1a1; margin-top: 0.25rem; }
+.scan-integrity-table { border-collapse: collapse; margin-top: 0.6rem; font-size: 0.78rem; }
+.scan-integrity-table th, .scan-integrity-table td {
+  text-align: left; padding: 0.2rem 1.25rem 0.2rem 0; color: #c8c8c8;
+  vertical-align: top; max-width: 46ch; overflow-wrap: anywhere;
+}
+.scan-integrity-table th { color: #888888; font-weight: 500; }
 .controls { display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
 .controls input[type="text"] {
   background: #000000; border: 1px solid #333333; border-radius: 0.6rem;
   color: #e5e5e5; padding: 0.4rem 0.75rem; font-size: 0.85rem; min-width: 220px;
 }
-.controls input[type="text"]:focus { outline: none; border-color: #555; }
+.controls input[type="text"]:focus { outline: none; border-color: var(--accent-soft); }
 .controls input[type="text"]::placeholder { color: #888888; }
-.filter-wrap { position: relative; }
-.btn-filter {
-  background: #111111; border: 1px solid #333333; border-radius: 0.6rem;
-  color: #e5e5e5; padding: 0.4rem 0.75rem; font-size: 0.85rem; cursor: pointer;
-  white-space: nowrap;
-}
-.btn-filter:hover { border-color: #888888; }
-.btn-filter.active { border-color: #d6336c; }
-.filter-panel {
-  display: none; position: absolute; top: 100%; left: 0; margin-top: 0.35rem; z-index: 900;
+/* Attached to <body>, not to its header: the table wrapper scrolls and would clip it. */
+.filter-menu {
+  display: none; position: fixed; z-index: 950;
   background: #111111; border: 1px solid #333333;
-  border-radius: 0.6rem; box-shadow: 0 8px 24px rgba(0,0,0,0.5); padding: 0.35rem 0;
-  min-width: 200px; max-height: 320px; overflow-y: auto;
+  border-radius: 0.6rem; box-shadow: 0 12px 32px rgba(0,0,0,0.6);
+  width: 268px; flex-direction: column; overflow: hidden;
 }
-.filter-panel.open { display: block; }
-.filter-panel .filter-select-all {
-  display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.75rem;
-  border-bottom: 1px solid #333333; margin-bottom: 0.25rem;
-  font-size: 0.8rem; font-weight: 600; color: #e5e5e5; cursor: pointer; white-space: nowrap;
+.filter-menu.open { display: flex; }
+.filter-menu-head { padding: 0.55rem 0.65rem 0.5rem; border-bottom: 1px solid #333333; }
+.filter-menu-title {
+  font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: #888888; margin-bottom: 0.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.filter-panel .filter-select-all:hover { background: #2a2a2a; }
-.filter-panel label {
-  display: flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.75rem;
-  font-size: 0.8rem; color: #e5e5e5; cursor: pointer; white-space: nowrap;
+.filter-menu-search {
+  width: 100%; background: #000000; border: 1px solid #333333; border-radius: 0.45rem;
+  color: #e5e5e5; padding: 0.35rem 0.55rem; font-size: 0.8rem; font-family: inherit;
 }
-.filter-panel label:hover { background: #333333; }
-.filter-panel input[type="checkbox"] { accent-color: #d6336c; }
+.filter-menu-search:focus { outline: none; border-color: var(--accent-soft); }
+.filter-menu-search::placeholder { color: #666666; }
+.filter-menu-list { overflow-y: auto; max-height: 260px; padding: 0.25rem 0; flex: 1 1 auto; }
+.filter-menu-list label {
+  display: flex; align-items: center; gap: 0.45rem; padding: 0.3rem 0.65rem;
+  font-size: 0.8rem; color: #e5e5e5; cursor: pointer;
+}
+.filter-menu-list label:hover { background: #2a2a2a; }
+.filter-menu-list input[type="checkbox"] { accent-color: var(--accent); flex: 0 0 auto; }
+.filter-menu-list .opt-text { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter-menu-list .opt-count { flex: 0 0 auto; color: #777777; font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+.filter-menu-list .opt-blank { color: #888888; font-style: italic; }
+.filter-menu-list .filter-select-all { border-bottom: 1px solid #262626; font-weight: 600; }
+.filter-menu-note { padding: 0.4rem 0.65rem; font-size: 0.72rem; color: #777777; }
+.filter-menu-foot {
+  display: flex; justify-content: space-between; gap: 0.5rem;
+  padding: 0.45rem 0.65rem; border-top: 1px solid #333333;
+}
+.filter-menu-foot button {
+  background: none; border: none; color: var(--accent-soft);
+  font-size: 0.78rem; font-family: inherit; cursor: pointer; padding: 0.1rem 0.2rem;
+}
+.filter-menu-foot button:hover { text-decoration: underline; }
+.filter-menu-foot button:disabled { color: #555555; cursor: default; text-decoration: none; }
+/* Chips make the active filters legible without opening every column menu. */
+.filter-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
+.filter-chips:empty { display: none; }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  background: rgba(230,80,100,0.12); border: 1px solid var(--accent-soft); border-radius: 999px;
+  color: #e5e5e5; font-size: 0.78rem; padding: 0.2rem 0.3rem 0.2rem 0.65rem; max-width: 320px;
+}
+.chip-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip-label strong { color: var(--accent-soft); font-weight: 600; }
+.chip button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.05rem; height: 1.05rem; border: none; border-radius: 50%;
+  background: none; color: #b9b9b9; cursor: pointer; padding: 0; flex: 0 0 auto;
+}
+.chip button:hover { background: rgba(255,255,255,0.12); color: #ffffff; }
 .btn-reset, .btn-columns {
   background: transparent; border: 1px solid #333333; border-radius: 0.6rem;
   color: #888888; padding: 0.4rem 0.75rem; font-size: 0.85rem; cursor: pointer;
@@ -85,35 +127,68 @@ a:hover { text-decoration: underline; }
   font-size: 0.8rem; color: #e5e5e5; cursor: pointer; white-space: nowrap;
 }
 .col-picker label:hover { background: #333333; }
-.col-picker input[type="checkbox"] { accent-color: #d6336c; }
+.col-picker input[type="checkbox"] { accent-color: var(--accent); }
 .row-count { color: #888888; font-size: 0.85rem; margin-left: auto; }
 .table-wrapper { overflow: auto; border: 1px solid #333333; border-radius: 0.6rem; max-height: calc(100vh - 14rem); }
 table { border-collapse: collapse; width: 100%; font-size: 0.8rem; table-layout: fixed; }
 th {
   background: #111111; color: #e5e5e5; border-bottom: 2px solid #333333;
-  padding: 0.6rem 0.75rem; text-align: left; position: sticky; top: 0; z-index: 1;
-  cursor: pointer; user-select: none; white-space: nowrap;
+  padding: 0.5rem 0.4rem 0.5rem 0.75rem; text-align: left; position: sticky; top: 0; z-index: 1;
+  user-select: none; white-space: nowrap; overflow: hidden;
 }
 th:hover { background: #2a2a2a; }
-th .sort-indicator { margin-left: 0.3rem; display: inline-flex; vertical-align: middle; opacity: 0.4; }
-th .sort-indicator.active { opacity: 1; }
+th.filtered { background: #1F1113; }
+/* Only the label shrinks, so the sort arrow and funnel stay reachable at any width. */
+.th-inner { display: flex; align-items: center; gap: 0.25rem; min-width: 0; }
+.th-label {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; cursor: pointer;
+}
+th .sort-indicator { flex: 0 0 auto; display: inline-flex; opacity: 0.4; cursor: pointer; }
+th .sort-indicator.active { opacity: 1; color: var(--accent-soft); }
+th .info-icon { flex: 0 0 auto; display: inline-flex; opacity: 0.5; cursor: help; }
+th .info-icon:hover { opacity: 1; color: var(--accent-soft); }
+.col-filter-btn {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 1.15rem; height: 1.15rem; padding: 0; margin-left: 0.1rem;
+  background: none; border: none; border-radius: 0.25rem;
+  color: #e5e5e5; opacity: 0.35; cursor: pointer;
+}
+.col-filter-btn:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+.col-filter-btn.active { opacity: 1; color: var(--accent-soft); }
+.col-filter-btn.open { opacity: 1; background: rgba(255,255,255,0.14); }
 th .col-resize {
   position: absolute; right: 0; top: 0; bottom: 0; width: 5px;
   cursor: col-resize; user-select: none;
 }
-th .col-resize:hover { background: #555; }
+th .col-resize:hover { background: var(--accent); }
 td {
   padding: 0.5rem 0.75rem; border-bottom: 1px solid #333333;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-tr:nth-child(odd) td { background: #0a0a0a; }
-tr:nth-child(even) td { background: #111111; }
-tr:hover td { background: #1a1a1a; }
+tr.row-odd td { background: #0a0a0a; }
+tr.row-even td { background: #111111; }
+tr.data-row:hover td { background: #1a1a1a; }
+th.expander-col, td.expander { width: 30px; min-width: 30px; text-align: center; padding-left: 0; padding-right: 0; }
+td.expander { cursor: pointer; color: #888888; user-select: none; }
+td.expander:hover { color: var(--accent-soft); }
+td.expander svg { transition: transform 0.15s ease; vertical-align: middle; }
+td.expander.open svg { transform: rotate(90deg); color: var(--accent-soft); }
+tr.detail-row td { background: #050505; white-space: normal; overflow: visible; padding: 0.75rem 1rem 0.9rem 2.4rem; }
+tr.detail-row:hover td { background: #050505; }
+.detail-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1.25rem; font-size: 0.8rem; margin: 0; }
+.detail-grid dt { color: #888888; white-space: nowrap; }
+.detail-grid dd { color: #e5e5e5; margin: 0; word-break: break-word; font-variant-numeric: tabular-nums; }
+.detail-grid dd.empty { color: #555555; }
+.detail-candidates { margin-top: 0.7rem; }
+.detail-candidates .detail-candidates-title { color: #888888; font-size: 0.78rem; margin-bottom: 0.3rem; }
+.detail-candidates ul { list-style: none; margin: 0; padding: 0; }
+.detail-candidates li { color: #cfcfcf; font-size: 0.78rem; line-height: 1.55; }
 .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 10px; font-size: 0.75rem; font-weight: 600; }
-.badge-high { background: rgba(232,54,111,0.14); color: #e8366f; }
-.badge-medium { background: rgba(240,152,62,0.14); color: #f0983e; }
-.badge-low { background: rgba(52,211,153,0.14); color: #34d399; }
-.badge-info { background: rgba(56,189,248,0.14); color: #38bdf8; }
+.badge-high { background: rgba(255,46,158,0.14); color: var(--sev-high); }
+.badge-medium { background: rgba(255,178,36,0.14); color: var(--sev-medium); }
+.badge-low { background: rgba(62,207,142,0.14); color: var(--sev-low); }
+.badge-info { background: rgba(92,160,255,0.14); color: var(--sev-info); }
 #context-menu {
   display: none; position: fixed; z-index: 1000;
   background: #111111; border: 1px solid #333333;
@@ -146,12 +221,38 @@ tr:hover td { background: #1a1a1a; }
   <div class="stat-card stat-low"><div class="stat-value">{{ severity_counts.LOW }}</div><div class="stat-label">Low</div></div>
   <div class="stat-card stat-info"><div class="stat-value">{{ severity_counts.INFO }}</div><div class="stat-label">Info</div></div>
 </div>
+{% if unreadable_hives %}
+<div class="scan-integrity">
+  <div class="scan-integrity-title">Scan incomplete: {{ unreadable_hives|length }} hive(s) were not read</div>
+  <div class="scan-integrity-note">Checks reading these hives produced nothing, which is not the same as finding nothing.</div>
+  <table class="scan-integrity-table">
+    <tr><th>Hive</th><th>User</th><th>Status</th><th>Reason</th></tr>
+    {% for record in unreadable_hives %}
+    <tr><td>{{ record.name }}</td><td>{{ record.owner }}</td><td>{{ record.status.value }}</td><td>{{ record.error }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% if failed_checks %}
+<div class="scan-integrity">
+  <div class="scan-integrity-title">Scan incomplete: {{ failed_checks|length }} check(s) did not run</div>
+  <div class="scan-integrity-note">These checks produced nothing because they failed, which is not the same as finding nothing.</div>
+  <table class="scan-integrity-table">
+    <tr><th>Check</th><th>Reason</th></tr>
+    {% for failure in failed_checks %}
+    <tr><td>{{ failure.check_id }}</td><td>{{ failure.error }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% if dirty_hives %}
+<div class="scan-integrity scan-integrity-soft">
+  <div class="scan-integrity-title">{{ dirty_hives|length }} hive(s) carried uncommitted transactions</div>
+  <div class="scan-integrity-note">Values written shortly before collection may be missing from this report. {{ dirty_hives|join(', ') }}</div>
+</div>
+{% endif %}
 <div class="controls">
   <input type="text" id="search" placeholder="Search all fields...">
-  <div class="filter-wrap"><button type="button" class="btn-filter" id="btn-filter-severity">All Severities</button><div class="filter-panel" id="panel-severity"></div></div>
-  <div class="filter-wrap"><button type="button" class="btn-filter" id="btn-filter-technique">All Techniques</button><div class="filter-panel" id="panel-technique"></div></div>
-  <div class="filter-wrap"><button type="button" class="btn-filter" id="btn-filter-mitre">All MITRE IDs</button><div class="filter-panel" id="panel-mitre"></div></div>
-  <div class="filter-wrap"><button type="button" class="btn-filter" id="btn-filter-access">All Access Levels</button><div class="filter-panel" id="panel-access"></div></div>
   <button type="button" id="reset-filters" class="btn-reset">Reset</button>
   <div class="col-picker-wrap">
     <button type="button" id="col-toggle" class="btn-columns">Columns</button>
@@ -159,12 +260,14 @@ tr:hover td { background: #1a1a1a; }
   </div>
   <span class="row-count" id="row-count"></span>
 </div>
+<div class="filter-chips" id="filter-chips"></div>
 <div class="table-wrapper">
   <table>
     <thead><tr id="thead-row"></tr></thead>
     <tbody id="tbody"></tbody>
   </table>
 </div>
+<div class="filter-menu" id="filter-menu"></div>
 <div id="context-menu">
   <button class="ctx-item" data-action="vt-search">Search on VirusTotal</button>
   <button class="ctx-item" data-action="vt-sha256" id="ctx-vt-sha256">Search SHA256 on VirusTotal</button>
@@ -186,6 +289,8 @@ tr:hover td { background: #1a1a1a; }
 var DATA={{ results|tojson }};
 var FIELDS={{ fieldnames|tojson }};
 var LABELS={{ labels|tojson }};
+var COLUMN_HELP={{ column_help|tojson }};
+var SVG_INFO='<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.5"/><path d="M8 7.2v3.6" stroke-linecap="round"/><circle cx="8" cy="5" r="0.4" fill="currentColor" stroke="none"/></svg>';
 var sortField=null,sortAsc=true,ctxRow=null,excludeTerms=[];
 var visibleFields=new Set(FIELDS);
 var searchEl=document.getElementById("search");
@@ -197,88 +302,271 @@ var colPicker=document.getElementById("col-picker");
 var SVG_UP='<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5L5 4L7.5 6.5"/></svg>';
 var SVG_DN='<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 3.5L5 6L7.5 3.5"/></svg>';
 var SVG_BOTH='<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.5L5 8L7.5 6.5M2.5 3.5L5 2L7.5 3.5"/></svg>';
-var DEFAULT_WIDTHS={path:280,value:260,technique:180,mitre_id:90,description:220,access_gained:100,severity:80,is_lolbin:60,exists:60,sha256:160,is_builtin:60,is_in_os_directory:80,signer:140,hostname:100,check_id:120,references:200};
+var SVG_CHEVRON='<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 2L6.5 5L3.5 8"/></svg>';
+/* Room for the sort arrow and the filter funnel; below ~96px the label is all ellipsis. */
+var DEFAULT_WIDTHS={path:280,value:260,technique:190,mitre_id:112,description:220,access_gained:116,severity:110,is_lolbin:96,launcher:130,exists:96,sha256:160,is_builtin:96,is_in_os_directory:112,signer:150,hostname:110,check_id:130,references:200,last_change:150,change_source:175};
 
-/* --- Filter state --- */
-var FILTER_DEFS=[
-  {key:"severity",field:"severity",allLabel:"All Severities",shortLabel:"Severities"},
-  {key:"technique",field:"technique",allLabel:"All Techniques",shortLabel:"Techniques"},
-  {key:"mitre",field:"mitre_id",allLabel:"All MITRE IDs",shortLabel:"MITRE IDs"},
-  {key:"access",field:"access_gained",allLabel:"All Access Levels",shortLabel:"Access Levels"}
-];
-var filterState={};
+/* A field appears in columnFilters only while it is restricted, and its value is
+   the set of cell texts to keep, so a missing entry means no filter at all. */
+var columnFilters={};
+var MAX_FILTER_OPTIONS=500;
+var BLANK_LABEL="(Blanks)";
+var SVG_FUNNEL='<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h12l-4.6 5.4v4.2l-2.8 1.4V8.4z"/></svg>';
+var SVG_CLOSE='<svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 2l6 6M8 2l-6 6"/></svg>';
+var filterMenu=document.getElementById("filter-menu");
+var chipsEl=document.getElementById("filter-chips");
+var openFilterField=null;
 
 document.getElementById("gen-time").textContent="Generated: "+new Date().toLocaleString();
 
-/* --- Filter panels --- */
-function buildFilterPanel(def){
-  var vals={};
-  DATA.forEach(function(r){var v=r[def.field];if(v!=null&&v!=="")vals[v]=1;});
-  var sorted=Object.keys(vals).sort();
-  var allSet=new Set(sorted);
-  filterState[def.key]={all:allSet,selected:new Set(sorted)};
-  var panel=document.getElementById("panel-"+def.key);
-  panel.textContent="";
-  var selectAllLabel=document.createElement("label");selectAllLabel.className="filter-select-all";
-  var cbAll=document.createElement("input");cbAll.type="checkbox";cbAll.checked=true;
-  selectAllLabel.appendChild(cbAll);selectAllLabel.appendChild(document.createTextNode("Select All"));
-  panel.appendChild(selectAllLabel);
-  var checkboxes=[];
-  function syncSelectAll(){
-    var sel=filterState[def.key].selected.size,total=filterState[def.key].all.size;
-    cbAll.checked=sel===total;cbAll.indeterminate=sel>0&&sel<total;
+function cellText(row,field){return String(row[field]!=null?row[field]:"");}
+function optionLabel(value){return value===""?BLANK_LABEL:value;}
+
+/* skipField drops one column's own filter, so its menu can show the counts you
+   would get by changing only that column. */
+function rowMatches(row,skipField){
+  for(var field in columnFilters){
+    if(field===skipField)continue;
+    if(!columnFilters[field].has(cellText(row,field)))return false;
   }
-  sorted.forEach(function(v){
-    var label=document.createElement("label");
-    var cb=document.createElement("input");cb.type="checkbox";cb.checked=true;cb.setAttribute("data-val",v);
-    cb.addEventListener("change",function(){
-      if(cb.checked)filterState[def.key].selected.add(v);else filterState[def.key].selected.delete(v);
-      syncSelectAll();updateFilterButton(def);renderTable();
-    });
-    label.appendChild(cb);label.appendChild(document.createTextNode(v));panel.appendChild(label);
-    checkboxes.push(cb);
-  });
-  cbAll.addEventListener("change",function(){
-    if(cbAll.checked){
-      checkboxes.forEach(function(cb){cb.checked=true;filterState[def.key].selected.add(cb.getAttribute("data-val"));});
-    }else{
-      checkboxes.forEach(function(cb){cb.checked=false;});
-      filterState[def.key].selected.clear();
+  var query=searchEl.value.toLowerCase();
+  if(query){
+    var matched=false;
+    for(var i=0;i<FIELDS.length;i++){
+      if(cellText(row,FIELDS[i]).toLowerCase().indexOf(query)!==-1){matched=true;break;}
     }
-    cbAll.indeterminate=false;
-    updateFilterButton(def);renderTable();
-  });
-  var btn=document.getElementById("btn-filter-"+def.key);
-  btn.addEventListener("click",function(e){
-    e.stopPropagation();
-    var wasOpen=panel.classList.contains("open");
-    closeAllPanels();
-    if(!wasOpen)panel.classList.add("open");
-  });
-}
-function updateFilterButton(def){
-  var st=filterState[def.key],btn=document.getElementById("btn-filter-"+def.key);
-  if(st.selected.size===st.all.size){btn.textContent=def.allLabel;btn.classList.remove("active");}
-  else{btn.textContent=def.shortLabel+" ("+st.selected.size+"/"+st.all.size+")";btn.classList.add("active");}
-}
-function closeAllPanels(){
-  document.querySelectorAll(".filter-panel.open").forEach(function(p){p.classList.remove("open");});
-  colPicker.classList.remove("open");
+    if(!matched)return false;
+  }
+  for(var e=0;e<excludeTerms.length;e++){
+    var term=excludeTerms[e];
+    if(String(row.path||"").toLowerCase().indexOf(term)!==-1)return false;
+    if(String(row.value||"").toLowerCase().indexOf(term)!==-1)return false;
+  }
+  return true;
 }
 
-/* --- Table headers with default widths --- */
+/* Distinct values in the column, counted against the other columns' filters. */
+function optionsFor(field){
+  var counts=Object.create(null);
+  DATA.forEach(function(row){
+    var text=cellText(row,field);
+    if(!(text in counts))counts[text]=0;
+    if(rowMatches(row,field))counts[text]+=1;
+  });
+  return Object.keys(counts).sort(function(a,b){
+    if(a==="")return -1;
+    if(b==="")return 1;
+    return a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"});
+  }).map(function(text){return {value:text,count:counts[text]};});
+}
+
+function isFiltered(field){return Object.prototype.hasOwnProperty.call(columnFilters,field);}
+function clearColumnFilter(field){
+  delete columnFilters[field];
+  refreshFilterUi();
+}
+function refreshFilterUi(){
+  theadRow.querySelectorAll(".col-filter-btn").forEach(function(btn){
+    var field=btn.getAttribute("data-field");
+    btn.classList.toggle("active",isFiltered(field));
+    btn.title=isFiltered(field)?"Filtered - "+columnFilters[field].size+" value(s) kept":"Filter this column";
+    var th=btn.closest("th");
+    if(th)th.classList.toggle("filtered",isFiltered(field));
+  });
+  renderChips();renderTable();
+}
+
+function renderChips(){
+  chipsEl.textContent="";
+  FIELDS.forEach(function(field){
+    if(!isFiltered(field))return;
+    var selected=columnFilters[field];
+    var chip=document.createElement("span");chip.className="chip";
+    var label=document.createElement("span");label.className="chip-label";
+    var name=document.createElement("strong");name.textContent=(LABELS[field]||field)+": ";
+    label.appendChild(name);
+    var shown=Array.from(selected).map(optionLabel);
+    label.appendChild(document.createTextNode(
+      shown.length===0?"none":(shown.length<=2?shown.join(", "):shown.length+" selected")
+    ));
+    label.title=(LABELS[field]||field)+": "+(shown.length?shown.join(", "):"none");
+    chip.appendChild(label);
+    var close=document.createElement("button");
+    close.type="button";close.innerHTML=SVG_CLOSE;
+    close.title="Clear this filter";
+    close.setAttribute("aria-label","Clear filter on "+(LABELS[field]||field));
+    close.addEventListener("click",function(e){e.stopPropagation();clearColumnFilter(field);});
+    chip.appendChild(close);
+    chipsEl.appendChild(chip);
+  });
+}
+
+function closeFilterMenu(){
+  filterMenu.classList.remove("open");
+  openFilterField=null;
+  theadRow.querySelectorAll(".col-filter-btn.open").forEach(function(b){b.classList.remove("open");});
+}
+function closeAllPanels(){closeFilterMenu();colPicker.classList.remove("open");}
+
+function openFilterMenu(field,anchor){
+  closeAllPanels();
+  openFilterField=field;
+  anchor.classList.add("open");
+  var options=optionsFor(field);
+  var draft=isFiltered(field)
+    ? new Set(columnFilters[field])
+    : new Set(options.map(function(o){return o.value;}));
+
+  filterMenu.textContent="";
+  var head=document.createElement("div");head.className="filter-menu-head";
+  var title=document.createElement("div");title.className="filter-menu-title";
+  title.textContent=LABELS[field]||field;head.appendChild(title);
+  var search=document.createElement("input");
+  search.type="text";search.className="filter-menu-search";
+  search.placeholder="Filter values...";
+  search.setAttribute("aria-label","Filter values in "+(LABELS[field]||field));
+  head.appendChild(search);
+  filterMenu.appendChild(head);
+
+  var list=document.createElement("div");list.className="filter-menu-list";
+  filterMenu.appendChild(list);
+
+  var foot=document.createElement("div");foot.className="filter-menu-foot";
+  var clearBtn=document.createElement("button");clearBtn.type="button";clearBtn.textContent="Clear filter";
+  var applyBtn=document.createElement("button");applyBtn.type="button";applyBtn.textContent="Apply";
+  foot.appendChild(clearBtn);foot.appendChild(applyBtn);
+  filterMenu.appendChild(foot);
+
+  function commit(){
+    var all=options.length;
+    if(draft.size===all)delete columnFilters[field];
+    else columnFilters[field]=new Set(draft);
+    refreshFilterUi();
+  }
+  function renderOptions(){
+    var needle=search.value.toLowerCase();
+    var shown=options.filter(function(o){
+      return optionLabel(o.value).toLowerCase().indexOf(needle)!==-1;
+    });
+    list.textContent="";
+
+    var allLabel=document.createElement("label");allLabel.className="filter-select-all";
+    var cbAll=document.createElement("input");cbAll.type="checkbox";
+    var visibleSelected=shown.filter(function(o){return draft.has(o.value);}).length;
+    cbAll.checked=shown.length>0&&visibleSelected===shown.length;
+    cbAll.indeterminate=visibleSelected>0&&visibleSelected<shown.length;
+    cbAll.addEventListener("change",function(){
+      shown.forEach(function(o){if(cbAll.checked)draft.add(o.value);else draft.delete(o.value);});
+      renderOptions();
+    });
+    var allText=document.createElement("span");allText.className="opt-text";
+    allText.textContent=needle?"Select all matching":"Select all";
+    // No count here: every other row counts matching ROWS, while this one could
+    // only count distinct values, and the same grey column reads as the same unit.
+    allLabel.appendChild(cbAll);allLabel.appendChild(allText);
+    list.appendChild(allLabel);
+
+    shown.slice(0,MAX_FILTER_OPTIONS).forEach(function(option){
+      var label=document.createElement("label");
+      var cb=document.createElement("input");cb.type="checkbox";cb.checked=draft.has(option.value);
+      cb.addEventListener("change",function(){
+        if(cb.checked)draft.add(option.value);else draft.delete(option.value);
+        renderOptions();
+      });
+      var text=document.createElement("span");text.className="opt-text";
+      text.textContent=optionLabel(option.value);
+      if(option.value==="")text.classList.add("opt-blank");
+      text.title=optionLabel(option.value);
+      var count=document.createElement("span");count.className="opt-count";
+      count.textContent=String(option.count);
+      label.appendChild(cb);label.appendChild(text);label.appendChild(count);
+      list.appendChild(label);
+    });
+    if(shown.length>MAX_FILTER_OPTIONS){
+      var note=document.createElement("div");note.className="filter-menu-note";
+      note.textContent=(shown.length-MAX_FILTER_OPTIONS)+" more value(s) not shown - narrow the search above.";
+      list.appendChild(note);
+    }else if(!shown.length){
+      var empty=document.createElement("div");empty.className="filter-menu-note";
+      empty.textContent="No values match.";
+      list.appendChild(empty);
+    }
+    clearBtn.disabled=!isFiltered(field)&&draft.size===options.length;
+  }
+
+  search.addEventListener("input",renderOptions);
+  search.addEventListener("keydown",function(e){if(e.key==="Enter"){commit();closeFilterMenu();}});
+  clearBtn.addEventListener("click",function(){
+    draft=new Set(options.map(function(o){return o.value;}));
+    delete columnFilters[field];
+    refreshFilterUi();closeFilterMenu();
+  });
+  applyBtn.addEventListener("click",function(){commit();closeFilterMenu();});
+
+  renderOptions();
+  filterMenu.classList.add("open");
+  positionFilterMenu(anchor);
+  search.focus();
+}
+
+/* The menu lives on <body>, so it is placed from the header's viewport rect. */
+function positionFilterMenu(anchor){
+  var rect=anchor.getBoundingClientRect();
+  var width=filterMenu.offsetWidth,height=filterMenu.offsetHeight;
+  var left=Math.min(rect.right-width,window.innerWidth-width-8);
+  filterMenu.style.left=Math.max(8,left)+"px";
+  var below=rect.bottom+4;
+  filterMenu.style.top=(below+height>window.innerHeight-8
+    ?Math.max(8,rect.top-height-4)
+    :below)+"px";
+}
+
 function buildHeaders(){
   theadRow.textContent="";
+  var exTh=document.createElement("th");exTh.className="expander-col";
+  theadRow.appendChild(exTh);
   FIELDS.forEach(function(f){
     if(!visibleFields.has(f))return;
-    var th=document.createElement("th");th.textContent=LABELS[f]||f;th.setAttribute("data-field",f);
-    var dw=DEFAULT_WIDTHS[f]||120;
+    var th=document.createElement("th");th.setAttribute("data-field",f);
+    if(isFiltered(f))th.classList.add("filtered");
+    var dw=DEFAULT_WIDTHS[f]||(f.indexOf("enrichment.")===0?240:120);
     th.style.width=dw+"px";th.style.minWidth="20px";
+
+    var inner=document.createElement("div");inner.className="th-inner";
+    var label=document.createElement("span");label.className="th-label";
+    label.textContent=LABELS[f]||f;label.title=LABELS[f]||f;
     var indicator=document.createElement("span");indicator.className="sort-indicator";
     indicator.innerHTML=sortField===f?(sortAsc?SVG_UP:SVG_DN):SVG_BOTH;
     if(sortField===f)indicator.classList.add("active");
-    th.appendChild(indicator);
-    th.addEventListener("click",function(){if(!resizing){sortBy(f);}});
+    function onSort(){if(!resizing)sortBy(f);}
+    label.addEventListener("click",onSort);
+    indicator.addEventListener("click",onSort);
+    inner.appendChild(label);inner.appendChild(indicator);
+
+    if(COLUMN_HELP[f]){
+      var info=document.createElement("span");info.className="info-icon";
+      info.innerHTML=SVG_INFO;info.title=COLUMN_HELP[f];
+      info.addEventListener("click",function(e){e.stopPropagation();});
+      inner.appendChild(info);
+    }
+
+    var filterBtn=document.createElement("button");
+    filterBtn.type="button";filterBtn.className="col-filter-btn";
+    filterBtn.setAttribute("data-field",f);
+    filterBtn.innerHTML=SVG_FUNNEL;
+    filterBtn.setAttribute("aria-label","Filter "+(LABELS[f]||f));
+    if(isFiltered(f)){
+      filterBtn.classList.add("active");
+      filterBtn.title="Filtered - "+columnFilters[f].size+" value(s) kept";
+    }else{filterBtn.title="Filter this column";}
+    filterBtn.addEventListener("click",function(e){
+      e.stopPropagation();
+      if(openFilterField===f){closeFilterMenu();return;}
+      openFilterMenu(f,filterBtn);
+    });
+    inner.appendChild(filterBtn);
+
+    th.appendChild(inner);
     var handle=document.createElement("div");handle.className="col-resize";
     handle.addEventListener("mousedown",function(e){e.stopPropagation();initResize(e,th);});
     th.appendChild(handle);
@@ -294,18 +582,8 @@ function initResize(e,th){
   document.addEventListener("mousemove",onMove);document.addEventListener("mouseup",onUp);window.addEventListener("blur",onUp);
 }
 
-/* --- Filtering & rendering --- */
 function getFilteredData(){
-  var query=searchEl.value.toLowerCase();
-  var out=DATA.filter(function(r){
-    for(var i=0;i<FILTER_DEFS.length;i++){
-      var fd=FILTER_DEFS[i],st=filterState[fd.key];
-      if(st.selected.size<st.all.size&&!st.selected.has(r[fd.field]))return false;
-    }
-    if(query){var matched=false;FIELDS.forEach(function(f){if(String(r[f]!=null?r[f]:"").toLowerCase().indexOf(query)!==-1)matched=true;});if(!matched)return false;}
-    for(var e=0;e<excludeTerms.length;e++){var ex=excludeTerms[e],p=String(r.path||"").toLowerCase(),v=String(r.value||"").toLowerCase();if(p.indexOf(ex)!==-1||v.indexOf(ex)!==-1)return false;}
-    return true;
-  });
+  var out=DATA.filter(function(r){return rowMatches(r,null);});
   if(sortField!==null){
     out.sort(function(a,b){
       var valA=String(a[sortField]!=null?a[sortField]:""),valB=String(b[sortField]!=null?b[sortField]:"");
@@ -317,16 +595,57 @@ function getFilteredData(){
 }
 function renderTable(){
   var rows=getFilteredData(),frag=document.createDocumentFragment();
-  rows.forEach(function(r){frag.appendChild(renderRow(r));});
+  rows.forEach(function(r,i){
+    var tr=renderRow(r);
+    tr.className=(i%2===0?"row-even":"row-odd")+" data-row";
+    frag.appendChild(tr);
+  });
   tbody.textContent="";tbody.appendChild(frag);
   rowCountEl.textContent=rows.length+" / "+DATA.length+" rows"+(excludeTerms.length?" ("+excludeTerms.length+" excluded)":"");
 }
+function toggleDetail(mainTr,row,cell){
+  var next=mainTr.nextSibling;
+  if(next&&next.classList&&next.classList.contains("detail-row")){
+    next.parentNode.removeChild(next);cell.classList.remove("open");
+  }else{
+    mainTr.parentNode.insertBefore(buildDetailRow(row),mainTr.nextSibling);
+    cell.classList.add("open");
+  }
+}
+function buildDetailRow(row){
+  var tr=document.createElement("tr");tr.className="detail-row";
+  var td=document.createElement("td");td.colSpan=visibleFields.size+1;
+  var dl=document.createElement("dl");dl.className="detail-grid";
+  FIELDS.forEach(function(f){
+    var dt=document.createElement("dt");dt.textContent=LABELS[f]||f;
+    var dd=document.createElement("dd");
+    var val=row[f]!=null?String(row[f]):"";
+    if(val===""){dd.textContent="-";dd.className="empty";}else{dd.textContent=val;}
+    dl.appendChild(dt);dl.appendChild(dd);
+  });
+  td.appendChild(dl);
+  if(row._change_candidates&&row._change_candidates.length){
+    var box=document.createElement("div");box.className="detail-candidates";
+    var title=document.createElement("div");title.className="detail-candidates-title";
+    title.textContent="Change evidence considered";box.appendChild(title);
+    var ul=document.createElement("ul");
+    row._change_candidates.forEach(function(c){var li=document.createElement("li");li.textContent=c;ul.appendChild(li);});
+    box.appendChild(ul);td.appendChild(box);
+  }
+  tr.appendChild(td);return tr;
+}
 function renderRow(row){
   var tr=document.createElement("tr");
+  var ex=document.createElement("td");ex.className="expander";ex.innerHTML=SVG_CHEVRON;
+  ex.title="Expand this finding";
+  ex.addEventListener("click",function(e){e.stopPropagation();toggleDetail(tr,row,ex);});
+  tr.appendChild(ex);
   FIELDS.forEach(function(f){
     if(!visibleFields.has(f))return;
     var td=document.createElement("td");
-    td.title=String(row[f]!=null?row[f]:"");
+    if(f==="last_change"&&row._change_candidates&&row._change_candidates.length){
+      td.title="Candidates considered:\n"+row._change_candidates.join("\n");
+    }else{td.title=String(row[f]!=null?row[f]:"");}
     if(f==="severity"){
       var badge=document.createElement("span");
       badge.className="badge badge-"+String(row[f]||"").toLowerCase();
@@ -344,12 +663,12 @@ function sortBy(field){
 function updateSortIndicators(){
   theadRow.querySelectorAll("th").forEach(function(th){
     var f=th.getAttribute("data-field"),ind=th.querySelector(".sort-indicator");
+    if(!ind)return;
     if(f===sortField){ind.innerHTML=sortAsc?SVG_UP:SVG_DN;ind.classList.add("active");}
     else{ind.innerHTML=SVG_BOTH;ind.classList.remove("active");}
   });
 }
 
-/* --- Context menu --- */
 function showContextMenu(e,row){
   e.preventDefault();ctxRow=row;
   var sha=row.sha256||"";
@@ -379,21 +698,27 @@ function handleContextAction(action){
   hideContextMenu();
 }
 
-/* --- Event listeners --- */
 var debounceTimer;searchEl.addEventListener("input",function(){clearTimeout(debounceTimer);debounceTimer=setTimeout(renderTable,200);});
 document.getElementById("reset-filters").addEventListener("click",function(){
   searchEl.value="";sortField=null;sortAsc=true;visibleFields=new Set(FIELDS);excludeTerms=[];
-  FILTER_DEFS.forEach(function(def){
-    var st=filterState[def.key];
-    st.selected=new Set(st.all);
-    document.getElementById("panel-"+def.key).querySelectorAll('input[type="checkbox"]').forEach(function(cb){cb.checked=true;});
-    updateFilterButton(def);
-  });
-  buildColPicker();buildHeaders();renderTable();
+  columnFilters={};
+  closeAllPanels();
+  buildColPicker();buildHeaders();renderChips();renderTable();
 });
 document.addEventListener("click",function(e){
   hideContextMenu();
-  if(!e.target.closest(".filter-wrap")&&!e.target.closest(".col-picker-wrap"))closeAllPanels();
+  if(e.target.closest("#filter-menu"))return;
+  if(!e.target.closest(".col-filter-btn")&&!e.target.closest(".col-picker-wrap"))closeAllPanels();
+});
+/* Body-anchored: the menu must follow or close whenever its header moves. */
+window.addEventListener("resize",closeFilterMenu);
+document.querySelector(".table-wrapper").addEventListener("scroll",function(){
+  if(openFilterField===null)return;
+  var anchor=null;
+  theadRow.querySelectorAll(".col-filter-btn").forEach(function(btn){
+    if(btn.getAttribute("data-field")===openFilterField)anchor=btn;
+  });
+  if(anchor)positionFilterMenu(anchor);else closeFilterMenu();
 });
 document.addEventListener("scroll",hideContextMenu,true);
 document.addEventListener("keydown",function(e){if(e.key==="Escape"){hideContextMenu();closeAllPanels();}});
@@ -419,8 +744,7 @@ document.getElementById("col-toggle").addEventListener("click",function(e){
   if(!wasOpen)colPicker.classList.add("open");
 });
 
-/* --- Init --- */
-buildColPicker();buildHeaders();FILTER_DEFS.forEach(buildFilterPanel);renderTable();
+buildColPicker();buildHeaders();renderChips();renderTable();
 })();
 </script>
 </body>
