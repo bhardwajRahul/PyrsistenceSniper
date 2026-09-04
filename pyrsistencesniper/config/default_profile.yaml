@@ -109,7 +109,8 @@ checks:
   ae_debug:
     allow:
       - reason: 'Known JIT debugger'
-        value_matches: '(vsjitdebugger|drwtsn32)'
+        value_matches: '(vsjitdebugger|drwtsn32)\.exe'
+        signer: 'Microsoft'
 
   amsi_providers:
     allow:
@@ -346,7 +347,8 @@ checks:
   run_keys:
     allow:
       - reason: 'Windows Security Health tray'
-        value_matches: 'SecurityHealthSystray'
+        value_matches: 'SecurityHealthSystray\.exe'
+        signer: 'Microsoft'
       - reason: 'Realtek HD Audio service'
         value_matches: 'RtkAudUService64\.exe'
         signer: 'Realtek'
