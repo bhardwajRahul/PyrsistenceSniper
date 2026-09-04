@@ -37,7 +37,7 @@ classifiers = [
 ]
 dependencies = [
     "libregf-python>=20240421",
-    "pyyaml>=6.0,<7.0",
+    "pyyaml>=6.0.1,<7.0",
     "jinja2>=3.1,<4.0",
     "lief>=0.17,<2.0",
     "asn1crypto>=1.5,<2.0",
@@ -169,7 +169,6 @@ dev = [
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 version_variables = ["pyrsistencesniper/__init__.py:__version__"]
-branch = "main"
 major_on_zero = false
 commit_message = "chore(release): v{version} [skip ci]"
 tag_format = "v{version}"
@@ -177,4 +176,8 @@ tag_format = "v{version}"
 [tool.semantic_release.commit_parser_options]
 allowed_tags = ["feat", "fix", "perf", "refactor", "style", "docs", "chore", "ci", "test", "build"]
 minor_tags = ["feat"]
-patch_tags = ["fix", "perf", "refactor", "style"]
+patch_tags = ["fix", "perf", "refactor", "style", "build"]
+
+[tool.semantic_release.branches.main]
+match = "main"
+prerelease = false
