@@ -20,7 +20,7 @@ from pyrsistencesniper.core.models import (
 CORE_FIELDS: tuple[str, ...] = tuple(Finding.FIELDS.keys())
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
-_ILLEGAL_SPREADSHEET_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_ILLEGAL_SPREADSHEET_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff]")
 
 
 # Without the escape handler, one artifact named outside the legacy Windows
@@ -48,7 +48,9 @@ def label_for(field: str) -> str:
 
 # Findings carry attacker-controlled registry data: an unquoted leading formula
 # trigger makes the report executable, and a control character the spreadsheet
-# formats reject corrupts the whole workbook after a successful scan.
+# formats reject corrupts the whole workbook after a successful scan. Lone
+# surrogates are replaced for the same reason and are worse: openpyxl accepts
+# them, so the scan reports success and leaves a workbook nothing can open.
 def sanitize_cell(value: object) -> str:
     """Quote formula triggers and replace rejected control characters."""
     text = _ILLEGAL_SPREADSHEET_CHARS.sub("�", str(value))
@@ -71,7 +73,13 @@ class OutputBase(ABC):
     ) -> None:
         """Write results to a file path, open stream, or stdout."""
         if isinstance(output, Path):
-            with output.open("w", encoding="utf-8", **self._open_kwargs()) as stream:
+            # Same escape handler as the console stream: a name the image
+            # carries but UTF-8 cannot encode (a lone surrogate from a
+            # non-UTF-8 filename) would otherwise raise mid-write and take
+            # every later finding in the report with it.
+            with output.open(
+                "w", encoding="utf-8", errors="backslashreplace", **self._open_kwargs()
+            ) as stream:
                 self._write(results, stream, inventory=inventory, failures=failures)
         elif output is not None:
             self._write(results, output, inventory=inventory, failures=failures)

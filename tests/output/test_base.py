@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import io
 import sys
+from pathlib import Path
 from typing import Any
 
 from pyrsistencesniper.core.models import AccessLevel, Enrichment, Finding
-from pyrsistencesniper.output.base import OutputBase, _console_stream
+from pyrsistencesniper.output.base import OutputBase, _console_stream, sanitize_cell
 
 
 def _make_finding(**kwargs: object) -> Finding:
@@ -114,3 +115,31 @@ def test_console_stream_escapes_characters_the_codepage_cannot_encode() -> None:
     written = legacy.buffer.getvalue().decode("cp1252")
     assert "\\u666e" in written
     assert "\\u901a" in written
+
+
+# A non-UTF-8 filename in the image reaches a finding as a lone surrogate via
+# surrogateescape, which is routine when a Windows image is mounted on Linux.
+_SURROGATE_NAME = "evil" + chr(0xDCFF) + ".exe"
+
+
+def test_file_report_survives_an_unencodable_name(tmp_path: Path) -> None:
+    """One name UTF-8 cannot encode must not destroy the whole report file."""
+
+    class _Renderer(OutputBase):
+        def _write(self, results, out, *, inventory=(), failures=()) -> None:
+            out.write(_SURROGATE_NAME + "\n")
+            out.write("the finding after it\n")
+
+    target = tmp_path / "report.txt"
+    _Renderer().render([], output=target)
+
+    written = target.read_text(encoding="utf-8")
+    assert "the finding after it" in written, "later findings must survive"
+    assert "\\udcff" in written, "the name is escaped rather than dropped"
+
+
+def test_sanitize_cell_replaces_a_lone_surrogate() -> None:
+    """openpyxl accepts a surrogate and then writes a workbook nothing can open."""
+    cleaned = sanitize_cell(_SURROGATE_NAME)
+    assert chr(0xDCFF) not in cleaned
+    assert cleaned.startswith("evil")
