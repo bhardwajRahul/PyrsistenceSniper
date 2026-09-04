@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.9.1 (2026-09-04)
+
+### Bug Fixes
+
+- **checks**: Give two allow rules a condition attackers cannot forge
+  ([`d762966`](https://github.com/Hexastrike/PyrsistenceSniper/commit/d762966788fd0e35baf6c703425dcfa629bd7a66))
+
+- **core**: Reject an embedded nul rather than relying on the host
+  ([`8601cb2`](https://github.com/Hexastrike/PyrsistenceSniper/commit/8601cb2b205a637878173ec637d3f82f845f5392))
+
+- **output**: Keep one unencodable name from destroying the report
+  ([`90b137c`](https://github.com/Hexastrike/PyrsistenceSniper/commit/90b137c837b7f98b8c80d8b7759972c4458490c5))
+
+- **T1546**: Enforce the wmi record cap before appending a window
+  ([`0f74b1c`](https://github.com/Hexastrike/PyrsistenceSniper/commit/0f74b1ce452063834a8b28f0cb742382725c25e6))
+
+### Build System
+
+- Fix the pyyaml floor and the release configuration
+  ([`328ce3a`](https://github.com/Hexastrike/PyrsistenceSniper/commit/328ce3a195d0a7bbfca89bbd477be869bd25ff6d))
+
+- Refresh the lockfile for the pyyaml floor
+  ([`d064cb5`](https://github.com/Hexastrike/PyrsistenceSniper/commit/d064cb5e5beb89a31c6793d9dd69d91c8473e794))
+
+- Support python 3.13 and 3.14
+  ([`110b4bb`](https://github.com/Hexastrike/PyrsistenceSniper/commit/110b4bb48441e1fd54a4e06f9de2b78592fdb5df))
+
+
 ## v0.9.0 (2026-09-03)
 
 ### Bug Fixes
