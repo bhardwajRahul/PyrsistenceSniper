@@ -159,16 +159,27 @@ def _iter_windows(handle: BinaryIO) -> Iterator[tuple[bytes, int]]:
         window = window[-_OVERLAP_BYTES:] + block
 
 
+def _heap_index(
+    heaps: list[tuple[str, list[str]]],
+) -> dict[tuple[str, str], list[str]]:
+    """Map each (class, value) pair to the values of the first heap holding it."""
+    # Built once per repository. Scanning every heap per binding instead is
+    # quadratic, and a crafted repository supplies both sides of that product.
+    index: dict[tuple[str, str], list[str]] = {}
+    for heap_class, values in heaps:
+        for value in values:
+            index.setdefault((heap_class, value), values)
+    return index
+
+
 def _payload_beside(
-    heaps: list[tuple[str, list[str]]], class_name: str, instance: str
+    index: dict[tuple[str, str], list[str]], class_name: str, instance: str
 ) -> str:
     """Return the longest value stored alongside a named instance."""
-    for heap_class, values in heaps:
-        if heap_class == class_name and instance in values:
-            return max(
-                (value for value in values if value != instance), key=len, default=""
-            )
-    return ""
+    values = index.get((class_name, instance))
+    if values is None:
+        return ""
+    return max((value for value in values if value != instance), key=len, default="")
 
 
 def _nearest_filter(data: bytes, offset: int) -> str:
@@ -239,15 +250,31 @@ class WmiEventSubscription(PersistencePlugin):
             repository_bytes = _io_path(cim_path).stat().st_size
             with _io_path(cim_path).open("rb") as handle:
                 for window, cutoff in _iter_windows(handle):
-                    heaps.extend(_instance_heaps(window, cutoff))
-                    bindings.extend(_bindings(window, cutoff, already_named))
-                    if len(heaps) + len(bindings) >= _MAX_RECORDS:
+                    # The budget is spent as each window is appended rather than
+                    # checked afterwards: one 4 MiB window holds far more records
+                    # than the cap, so testing after the extend let a crafted
+                    # repository overshoot it by an order of magnitude.
+                    budget = max(_MAX_RECORDS - len(heaps) - len(bindings), 0)
+                    window_heaps = _instance_heaps(window, cutoff)
+                    kept_heaps = window_heaps[:budget]
+                    heaps.extend(kept_heaps)
+                    window_bindings = _bindings(window, cutoff, already_named)
+                    kept_bindings = window_bindings[: budget - len(kept_heaps)]
+                    bindings.extend(kept_bindings)
+                    dropped = (len(window_heaps) - len(kept_heaps)) + (
+                        len(window_bindings) - len(kept_bindings)
+                    )
+                    # Reported only when records were actually discarded, and
+                    # with the count really kept: the previous message named the
+                    # cap and claimed unread bytes even when neither was true.
+                    if dropped:
                         record_artifact_failure(
                             self.definition.id,
                             cim_path,
-                            f"stopped after {_MAX_RECORDS} consumer records; the "
-                            f"rest of the {repository_bytes} byte repository was "
-                            f"not examined",
+                            f"stopped after {len(heaps) + len(bindings)} consumer "
+                            f"records; {dropped} more in this window and the rest "
+                            f"of the {repository_bytes} byte repository were not "
+                            f"examined",
                         )
                         break
         except (OSError, MemoryError) as exc:
@@ -263,6 +290,7 @@ class WmiEventSubscription(PersistencePlugin):
     ) -> list[Finding]:
         """Emit one finding per consumer instance recorded in the repository."""
         findings: list[Finding] = []
+        index = _heap_index(heaps)
 
         for class_name, instance, filter_name in bindings:
             findings.append(
@@ -272,7 +300,7 @@ class WmiEventSubscription(PersistencePlugin):
                         class_name,
                         instance,
                         filter_name,
-                        _payload_beside(heaps, class_name, instance),
+                        _payload_beside(index, class_name, instance),
                     ),
                     access=AccessLevel.SYSTEM,
                     time_evidence=(FileWriteTime(path=cim_display, weak=True),),
