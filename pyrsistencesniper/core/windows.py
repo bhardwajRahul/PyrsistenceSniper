@@ -195,7 +195,13 @@ def canonicalize_windows_path(path: str) -> str:
 
 
 def is_representable_windows_path(path: str) -> bool:
-    """Report whether a path is short enough for a Windows volume to hold it."""
+    """Report whether a Windows volume could hold this path at all."""
+    # No filename may contain NUL. This is checked here rather than left to the
+    # platform because Python 3.14 on Windows stopped raising for an embedded
+    # NUL in Path.resolve(), so the caller can no longer learn it from an
+    # exception, and the same poisoned value would read differently per host.
+    if "\x00" in path:
+        return False
     # len() counts code points where NTFS counts UTF-16 units, so this is
     # permissive for astral characters, which is the safe direction: it only
     # ever accepts a name Windows itself would reject.

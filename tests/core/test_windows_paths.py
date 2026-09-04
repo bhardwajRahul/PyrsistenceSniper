@@ -5,6 +5,7 @@ from __future__ import annotations
 from pyrsistencesniper.core.windows import (
     canonicalize_windows_path,
     expand_env_vars,
+    is_representable_windows_path,
     normalize_windows_path,
 )
 
@@ -185,3 +186,20 @@ def test_canonicalize_windows_path_system32_with_leading_backslash() -> None:
     """A leading separator does not hide the System32 prefix from the anchor step."""
     result = canonicalize_windows_path("\\System32\\svchost.exe")
     assert result == "Windows\\System32\\svchost.exe"
+
+
+def test_representable_rejects_an_embedded_nul() -> None:
+    """No Windows filename may hold a NUL, whatever the host does with it."""
+    # Python 3.14 on Windows stopped raising for this in Path.resolve(), so the
+    # value has to be rejected here or the same image reads differently per host.
+    assert is_representable_windows_path("evil\x00payload.exe") is False
+
+
+def test_representable_accepts_an_ordinary_path() -> None:
+    """The guard must not reject the paths every scan is built from."""
+    assert is_representable_windows_path(r"Windows\System32\cmd.exe") is True
+
+
+def test_representable_rejects_an_over_long_component() -> None:
+    """NTFS caps one name component at 255 characters."""
+    assert is_representable_windows_path("Windows\\" + "a" * 256) is False
