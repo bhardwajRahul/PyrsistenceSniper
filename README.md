@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/pyrsistencesniper?color=blue)](https://pypi.org/project/pyrsistencesniper/)
 [![CI](https://github.com/Hexastrike/PyrsistenceSniper/actions/workflows/ci.yml/badge.svg)](https://github.com/Hexastrike/PyrsistenceSniper/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/Hexastrike/PyrsistenceSniper/graph/badge.svg)](https://codecov.io/gh/Hexastrike/PyrsistenceSniper)
-[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://pypi.org/project/pyrsistencesniper/)
+[![Python](https://img.shields.io/badge/python-3.10--3.14-3776AB?logo=python&logoColor=white)](https://pypi.org/project/pyrsistencesniper/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Hexastrike/PyrsistenceSniper/blob/main/LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue)](https://github.com/Hexastrike/PyrsistenceSniper)
 
@@ -20,18 +20,6 @@ Point it at a KAPE dump, a Velociraptor collection, or a mounted disk image and 
 - **Flexible output**: Console, CSV, HTML, and XLSX.
 - **Extensible plugin system**: A new persistence check is one file, usually declarative.
 - **Speed**: Native registry parsing via libregf. Scans complete in roughly 10 to 30 seconds on heavily used systems.
-
-## 📋 Prerequisites
-
-**Python 3.10+** required (3.10 to 3.12 recommended). PyrsistenceSniper depends on [libregf-python](https://github.com/libyal/libregf), a C extension for offline registry hive parsing.
-
-| Platform | Requirement |
-|----------|-------------|
-| **Windows** | None. Pre-built wheels are installed automatically. |
-| **Linux** | `gcc`, `make`, and Python headers (`sudo apt install build-essential python3-dev`). |
-| **macOS** | Xcode Command Line Tools (`xcode-select --install`). |
-
-> **Note:** Without a pre-built wheel for your platform and Python version, pip builds libregf from source (up to a minute). Windows users may also need the [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **"Desktop development with C++"** workload.
 
 ## 📦 Installation
 
